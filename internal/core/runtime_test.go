@@ -12,10 +12,10 @@ func TestRuntimeStatsPersist(t *testing.T) {
 	if err := stats.SetPeers(3); err != nil {
 		t.Fatal(err)
 	}
-	if err := stats.RecordDownload(100, "lan"); err != nil {
+	if err := stats.RecordDownload(100, "lan", "peer-a"); err != nil {
 		t.Fatal(err)
 	}
-	if err := stats.RecordUpload(50, "direct"); err != nil {
+	if err := stats.RecordUpload(50, "direct", "peer-b"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -38,5 +38,17 @@ func TestRuntimeStatsPersist(t *testing.T) {
 	}
 	if snapshot.PathStats.DirectBytes != 50 {
 		t.Fatalf("unexpected direct bytes: %d", snapshot.PathStats.DirectBytes)
+	}
+	if snapshot.PeerStats["peer-a"].DownloadedBytes != 100 {
+		t.Fatalf("unexpected peer-a downloaded bytes: %d", snapshot.PeerStats["peer-a"].DownloadedBytes)
+	}
+	if snapshot.PeerStats["peer-a"].DownloadedPieces != 1 {
+		t.Fatalf("unexpected peer-a downloaded pieces: %d", snapshot.PeerStats["peer-a"].DownloadedPieces)
+	}
+	if snapshot.PeerStats["peer-b"].UploadedBytes != 50 {
+		t.Fatalf("unexpected peer-b uploaded bytes: %d", snapshot.PeerStats["peer-b"].UploadedBytes)
+	}
+	if snapshot.PeerStats["peer-b"].UploadedPieces != 1 {
+		t.Fatalf("unexpected peer-b uploaded pieces: %d", snapshot.PeerStats["peer-b"].UploadedPieces)
 	}
 }

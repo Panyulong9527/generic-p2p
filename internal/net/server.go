@@ -86,7 +86,7 @@ func (s StoreContentSource) Piece(contentID string, pieceIndex int) ([]byte, err
 type Server struct {
 	ListenAddr    string
 	Source        ContentSource
-	OnPieceServed func(bytes int64, path string)
+	OnPieceServed func(bytes int64, path string, peerID string)
 }
 
 func NewServer(listenAddr string, source ContentSource) *Server {
@@ -192,7 +192,7 @@ func (s *Server) handleConn(conn net.Conn) {
 		}
 		_ = WriteMessage(conn, response)
 		if s.OnPieceServed != nil {
-			s.OnPieceServed(int64(len(data)), classifyRemotePath(conn.RemoteAddr().String()))
+			s.OnPieceServed(int64(len(data)), classifyRemotePath(conn.RemoteAddr().String()), conn.RemoteAddr().String())
 		}
 	default:
 		_ = writeError(conn, fmt.Errorf("unsupported message type: %s", message.Type))

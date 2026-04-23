@@ -18,18 +18,19 @@ type PieceStore struct {
 }
 
 type StoreStatus struct {
-	ContentID       string      `json:"contentId"`
-	State           string      `json:"state"`
-	ProgressValue   float64     `json:"progress"`
-	CompletedPieces int         `json:"completedPieces"`
-	TotalPieces     int         `json:"totalPieces"`
-	CompletedRanges []HaveRange `json:"completedRanges"`
-	DownloadBytes   int64       `json:"downloadBytes"`
-	UploadBytes     int64       `json:"uploadBytes"`
-	DownloadRate    int64       `json:"downloadRate"`
-	UploadRate      int64       `json:"uploadRate"`
-	Peers           int         `json:"peers"`
-	PathStats       PathStats   `json:"pathStats"`
+	ContentID       string               `json:"contentId"`
+	State           string               `json:"state"`
+	ProgressValue   float64              `json:"progress"`
+	CompletedPieces int                  `json:"completedPieces"`
+	TotalPieces     int                  `json:"totalPieces"`
+	CompletedRanges []HaveRange          `json:"completedRanges"`
+	DownloadBytes   int64                `json:"downloadBytes"`
+	UploadBytes     int64                `json:"uploadBytes"`
+	DownloadRate    int64                `json:"downloadRate"`
+	UploadRate      int64                `json:"uploadRate"`
+	Peers           int                  `json:"peers"`
+	PathStats       PathStats            `json:"pathStats"`
+	PeerStats       map[string]PeerStats `json:"peerStats,omitempty"`
 }
 
 func (s StoreStatus) Progress() float64 {
@@ -157,6 +158,7 @@ func (s *PieceStore) Status() StoreStatus {
 		UploadRate:      runtimeSnapshot(s.runtime).UploadRate,
 		Peers:           runtimeSnapshot(s.runtime).Peers,
 		PathStats:       mergePathStats(runtimeSnapshot(s.runtime).PathStats, downloadBytes),
+		PeerStats:       runtimeSnapshot(s.runtime).PeerStats,
 	}
 }
 

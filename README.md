@@ -7,6 +7,7 @@ Current v0.1 status:
 - `share` builds a content-addressed manifest with per-piece hashes.
 - `serve` exposes a file over the minimal TCP protocol.
 - `get` downloads pieces, stores verified pieces on disk, and can serve completed pieces while downloading.
+- `status` reports persisted transfer totals, path stats, and per-peer contribution stats.
 - `HAVE` ranges are supported.
 - LAN peer discovery is supported over UDP announcements.
 

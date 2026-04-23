@@ -14,12 +14,20 @@ type RuntimeStats struct {
 }
 
 type RuntimeData struct {
-	DownloadBytes int64     `json:"downloadBytes"`
-	UploadBytes   int64     `json:"uploadBytes"`
-	DownloadRate  int64     `json:"downloadRate"`
-	UploadRate    int64     `json:"uploadRate"`
-	Peers         int       `json:"peers"`
-	PathStats     PathStats `json:"pathStats"`
+	DownloadBytes int64                `json:"downloadBytes"`
+	UploadBytes   int64                `json:"uploadBytes"`
+	DownloadRate  int64                `json:"downloadRate"`
+	UploadRate    int64                `json:"uploadRate"`
+	Peers         int                  `json:"peers"`
+	PathStats     PathStats            `json:"pathStats"`
+	PeerStats     map[string]PeerStats `json:"peerStats,omitempty"`
+}
+
+type PeerStats struct {
+	DownloadedBytes  int64 `json:"downloadedBytes"`
+	UploadedBytes    int64 `json:"uploadedBytes"`
+	DownloadedPieces int   `json:"downloadedPieces"`
+	UploadedPieces   int   `json:"uploadedPieces"`
 }
 
 func OpenRuntimeStats(root string) (*RuntimeStats, error) {
@@ -49,21 +57,31 @@ func (r *RuntimeStats) SetPeers(peers int) error {
 	return r.saveLocked()
 }
 
-func (r *RuntimeStats) RecordDownload(bytes int64, path string) error {
+func (r *RuntimeStats) RecordDownload(bytes int64, path string, peerID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.data.DownloadBytes += bytes
 	r.data.DownloadRate = bytes
 	applyPathBytes(&r.data.PathStats, path, bytes)
+	ensurePeerStatsMap(&r.data)
+	stats := r.data.PeerStats[peerID]
+	stats.DownloadedBytes += bytes
+	stats.DownloadedPieces++
+	r.data.PeerStats[peerID] = stats
 	return r.saveLocked()
 }
 
-func (r *RuntimeStats) RecordUpload(bytes int64, path string) error {
+func (r *RuntimeStats) RecordUpload(bytes int64, path string, peerID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.data.UploadBytes += bytes
 	r.data.UploadRate = bytes
 	applyPathBytes(&r.data.PathStats, path, bytes)
+	ensurePeerStatsMap(&r.data)
+	stats := r.data.PeerStats[peerID]
+	stats.UploadedBytes += bytes
+	stats.UploadedPieces++
+	r.data.PeerStats[peerID] = stats
 	return r.saveLocked()
 }
 
@@ -94,5 +112,11 @@ func applyPathBytes(stats *PathStats, path string, bytes int64) {
 		stats.RelayBytes += bytes
 	default:
 		stats.DirectBytes += bytes
+	}
+}
+
+func ensurePeerStatsMap(data *RuntimeData) {
+	if data.PeerStats == nil {
+		data.PeerStats = make(map[string]PeerStats)
 	}
 }

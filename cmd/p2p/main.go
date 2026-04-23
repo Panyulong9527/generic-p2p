@@ -153,9 +153,9 @@ func runGet(logger *logging.Logger, args []string) error {
 		server := p2pnet.NewServer(*listen, p2pnet.StoreContentSource{
 			Store: store,
 		})
-		server.OnPieceServed = func(bytes int64, path string) {
+		server.OnPieceServed = func(bytes int64, path string, peerID string) {
 			if runtime := store.RuntimeStats(); runtime != nil {
-				_ = runtime.RecordUpload(bytes, path)
+				_ = runtime.RecordUpload(bytes, path, peerID)
 			}
 		}
 		go func() {
@@ -401,7 +401,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 			)
 		}
 		if runtime := store.RuntimeStats(); runtime != nil {
-			_ = runtime.RecordDownload(int64(len(data)), transferPathForPeer(selected.PeerID))
+			_ = runtime.RecordDownload(int64(len(data)), transferPathForPeer(selected.PeerID), selected.PeerID)
 		}
 		logger.Info("piece_downloaded",
 			"contentId", manifest.ContentID,
