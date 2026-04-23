@@ -1,0 +1,9 @@
+.idea/
+.integration-run-*/
+.integration-tracker-run-*/
+.p2p*/
+.p2p-store*/
+*.out.log
+*.err.log
+*.exe
+*.bin
