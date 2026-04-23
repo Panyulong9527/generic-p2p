@@ -789,6 +789,8 @@ func runStatus(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	manifestPath := fs.String("manifest", "", "path to manifest.json")
 	storeDir := fs.String("store-dir", ".p2p-store", "piece store directory")
+	watch := fs.Bool("watch", false, "continuously print status snapshots")
+	interval := fs.Duration("interval", time.Second, "refresh interval when --watch is enabled")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -801,7 +803,18 @@ func runStatus(args []string) error {
 	if err != nil {
 		return err
 	}
-	store, err := core.OpenPieceStore(filepath.Join(*storeDir, manifest.ContentID), manifest)
+	if *watch {
+		if *interval <= 0 {
+			return errors.New("status interval must be greater than zero")
+		}
+		return watchStatus(manifest, *storeDir, *interval)
+	}
+
+	return printStatusOnce(manifest, *storeDir)
+}
+
+func printStatusOnce(manifest *core.ContentManifest, storeDir string) error {
+	store, err := core.OpenPieceStore(filepath.Join(storeDir, manifest.ContentID), manifest)
 	if err != nil {
 		return err
 	}
@@ -816,6 +829,16 @@ func runStatus(args []string) error {
 	return nil
 }
 
+func watchStatus(manifest *core.ContentManifest, storeDir string, interval time.Duration) error {
+	for {
+		if err := printStatusOnce(manifest, storeDir); err != nil {
+			return err
+		}
+		fmt.Println()
+		time.Sleep(interval)
+	}
+}
+
 func printUsage() {
 	fmt.Println(`p2p commands:
   p2p share --path ./file.bin [--piece-size 1048576] [--data-dir .p2p]
@@ -823,5 +846,5 @@ func printUsage() {
   p2p serve --path ./file.bin [--listen 127.0.0.1:9001] [--data-dir .p2p] [--lan] [--tracker http://127.0.0.1:7000]
   p2p get --manifest .p2p/<contentId>/manifest.json --store-dir .p2p-store --out ./out.bin [--peer 127.0.0.1:9001] [--peers 127.0.0.1:9001,127.0.0.1:9002]
   p2p get --manifest .p2p/<contentId>/manifest.json --store-dir .p2p-store --out ./out.bin --listen 127.0.0.1:9002 [--seed-after-download] [--peers ...] [--lan] [--tracker http://127.0.0.1:7000]
-  p2p status --manifest .p2p/<contentId>/manifest.json --store-dir .p2p-store`)
+  p2p status --manifest .p2p/<contentId>/manifest.json --store-dir .p2p-store [--watch] [--interval 1s]`)
 }

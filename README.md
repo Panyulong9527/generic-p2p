@@ -8,6 +8,7 @@ Current v0.1 status:
 - `serve` exposes a file over the minimal TCP protocol.
 - `get` downloads pieces, stores verified pieces on disk, and can serve completed pieces while downloading.
 - `status` reports persisted transfer totals, path stats, and per-peer contribution stats.
+- `status --watch` continuously prints refreshed status snapshots for a running download.
 - `HAVE` ranges are supported.
 - LAN peer discovery is supported over UDP announcements.
 
