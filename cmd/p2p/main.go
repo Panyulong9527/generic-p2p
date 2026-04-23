@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -791,6 +792,7 @@ func runStatus(args []string) error {
 	storeDir := fs.String("store-dir", ".p2p-store", "piece store directory")
 	watch := fs.Bool("watch", false, "continuously print status snapshots")
 	interval := fs.Duration("interval", time.Second, "refresh interval when --watch is enabled")
+	pretty := fs.Bool("pretty", false, "print a human-readable status view instead of JSON")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -807,13 +809,13 @@ func runStatus(args []string) error {
 		if *interval <= 0 {
 			return errors.New("status interval must be greater than zero")
 		}
-		return watchStatus(manifest, *storeDir, *interval)
+		return watchStatus(manifest, *storeDir, *interval, true)
 	}
 
-	return printStatusOnce(manifest, *storeDir)
+	return printStatusOnce(manifest, *storeDir, *pretty)
 }
 
-func printStatusOnce(manifest *core.ContentManifest, storeDir string) error {
+func printStatusOnce(manifest *core.ContentManifest, storeDir string, pretty bool) error {
 	store, err := core.OpenPieceStore(filepath.Join(storeDir, manifest.ContentID), manifest)
 	if err != nil {
 		return err
@@ -821,6 +823,10 @@ func printStatusOnce(manifest *core.ContentManifest, storeDir string) error {
 	defer store.Close()
 
 	status := store.Status()
+	if pretty {
+		printPrettyStatus(status)
+		return nil
+	}
 	out, err := json.MarshalIndent(status, "", "  ")
 	if err != nil {
 		return err
@@ -829,14 +835,98 @@ func printStatusOnce(manifest *core.ContentManifest, storeDir string) error {
 	return nil
 }
 
-func watchStatus(manifest *core.ContentManifest, storeDir string, interval time.Duration) error {
+func watchStatus(manifest *core.ContentManifest, storeDir string, interval time.Duration, pretty bool) error {
 	for {
-		if err := printStatusOnce(manifest, storeDir); err != nil {
+		if err := printStatusOnce(manifest, storeDir, pretty); err != nil {
 			return err
 		}
 		fmt.Println()
 		time.Sleep(interval)
 	}
+}
+
+func printPrettyStatus(status core.StoreStatus) {
+	fmt.Printf(
+		"content=%s state=%s progress=%.1f%% pieces=%d/%d peers=%d\n",
+		shortContentID(status.ContentID),
+		status.State,
+		status.Progress()*100,
+		status.CompletedPieces,
+		status.TotalPieces,
+		status.Peers,
+	)
+	fmt.Printf(
+		"traffic down=%s up=%s downRate=%s/s upRate=%s/s\n",
+		formatBytes(status.DownloadBytes),
+		formatBytes(status.UploadBytes),
+		formatBytes(status.DownloadRate),
+		formatBytes(status.UploadRate),
+	)
+	fmt.Printf(
+		"path lan=%s direct=%s relay=%s\n",
+		formatBytes(status.PathStats.LANBytes),
+		formatBytes(status.PathStats.DirectBytes),
+		formatBytes(status.PathStats.RelayBytes),
+	)
+
+	if len(status.PeerStats) == 0 {
+		fmt.Println("peerStats none")
+		return
+	}
+
+	type peerRow struct {
+		peerID string
+		stats  core.PeerStats
+	}
+
+	rows := make([]peerRow, 0, len(status.PeerStats))
+	for peerID, stats := range status.PeerStats {
+		rows = append(rows, peerRow{peerID: peerID, stats: stats})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].stats.DownloadedBytes != rows[j].stats.DownloadedBytes {
+			return rows[i].stats.DownloadedBytes > rows[j].stats.DownloadedBytes
+		}
+		if rows[i].stats.UploadedBytes != rows[j].stats.UploadedBytes {
+			return rows[i].stats.UploadedBytes > rows[j].stats.UploadedBytes
+		}
+		return rows[i].peerID < rows[j].peerID
+	})
+
+	fmt.Println("peerStats")
+	for _, row := range rows {
+		fmt.Printf(
+			"  %s down=%s (%d pieces) up=%s (%d pieces)\n",
+			row.peerID,
+			formatBytes(row.stats.DownloadedBytes),
+			row.stats.DownloadedPieces,
+			formatBytes(row.stats.UploadedBytes),
+			row.stats.UploadedPieces,
+		)
+	}
+}
+
+func shortContentID(contentID string) string {
+	if len(contentID) <= 20 {
+		return contentID
+	}
+	return contentID[:20] + "..."
+}
+
+func formatBytes(value int64) string {
+	const unit = 1024
+	if value < unit {
+		return fmt.Sprintf("%d B", value)
+	}
+
+	div, exp := int64(unit), 0
+	for n := value / unit; n >= unit && exp < 5; n /= unit {
+		div *= unit
+		exp++
+	}
+
+	suffixes := []string{"KiB", "MiB", "GiB", "TiB", "PiB", "EiB"}
+	return fmt.Sprintf("%.1f %s", float64(value)/float64(div), suffixes[exp])
 }
 
 func printUsage() {
@@ -846,5 +936,5 @@ func printUsage() {
   p2p serve --path ./file.bin [--listen 127.0.0.1:9001] [--data-dir .p2p] [--lan] [--tracker http://127.0.0.1:7000]
   p2p get --manifest .p2p/<contentId>/manifest.json --store-dir .p2p-store --out ./out.bin [--peer 127.0.0.1:9001] [--peers 127.0.0.1:9001,127.0.0.1:9002]
   p2p get --manifest .p2p/<contentId>/manifest.json --store-dir .p2p-store --out ./out.bin --listen 127.0.0.1:9002 [--seed-after-download] [--peers ...] [--lan] [--tracker http://127.0.0.1:7000]
-  p2p status --manifest .p2p/<contentId>/manifest.json --store-dir .p2p-store [--watch] [--interval 1s]`)
+  p2p status --manifest .p2p/<contentId>/manifest.json --store-dir .p2p-store [--pretty] [--watch] [--interval 1s]`)
 }
