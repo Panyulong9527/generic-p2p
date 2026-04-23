@@ -103,7 +103,7 @@ try {
 
     Write-Host "Starting leecher2 on 127.0.0.1:$LeecherPort"
     $leecher2Process = Start-Process -FilePath $binPath `
-        -ArgumentList @("get", "--manifest", $manifestPath, "--store-dir", $store2Dir, "--out", $out2Path, "--listen", "127.0.0.1:$LeecherPort", "--tracker", $trackerUrl, "--peer", "127.0.0.1:$SeedPort") `
+        -ArgumentList @("get", "--manifest", $manifestPath, "--store-dir", $store2Dir, "--out", $out2Path, "--listen", "127.0.0.1:$LeecherPort", "--seed-after-download", "--tracker", $trackerUrl, "--peer", "127.0.0.1:$SeedPort") `
         -WorkingDirectory $projectRoot `
         -RedirectStandardOutput $leecher2OutLog `
         -RedirectStandardError $leecher2ErrLog `

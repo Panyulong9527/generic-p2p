@@ -122,6 +122,7 @@ func runGet(logger *logging.Logger, args []string) error {
 	peerAddr := fs.String("peer", "", "peer address such as 127.0.0.1:9001")
 	peerList := fs.String("peers", "", "comma separated peer addresses")
 	listen := fs.String("listen", "", "optional listen address for serving completed pieces while downloading")
+	seedAfterDownload := fs.Bool("seed-after-download", false, "keep serving after download completes when --listen is set")
 	lan := fs.Bool("lan", false, "enable LAN discovery")
 	lanAddr := fs.String("lan-addr", p2pnet.DefaultLANDiscoveryAddr, "LAN discovery UDP target/listen address")
 	trackerURL := fs.String("tracker", "", "tracker base URL such as http://127.0.0.1:7000")
@@ -251,6 +252,14 @@ func runGet(logger *logging.Logger, args []string) error {
 		return err
 	}
 	fmt.Println(string(statusJSON))
+
+	if *seedAfterDownload {
+		if *listen == "" {
+			return errors.New("--seed-after-download requires --listen")
+		}
+		logger.Info("seeding_after_download", "contentId", manifest.ContentID, "listen", *listen)
+		select {}
+	}
 	return nil
 }
 
@@ -813,6 +822,6 @@ func printUsage() {
   p2p tracker --listen 127.0.0.1:7000
   p2p serve --path ./file.bin [--listen 127.0.0.1:9001] [--data-dir .p2p] [--lan] [--tracker http://127.0.0.1:7000]
   p2p get --manifest .p2p/<contentId>/manifest.json --store-dir .p2p-store --out ./out.bin [--peer 127.0.0.1:9001] [--peers 127.0.0.1:9001,127.0.0.1:9002]
-  p2p get --manifest .p2p/<contentId>/manifest.json --store-dir .p2p-store --out ./out.bin --listen 127.0.0.1:9002 [--peers ...] [--lan] [--tracker http://127.0.0.1:7000]
+  p2p get --manifest .p2p/<contentId>/manifest.json --store-dir .p2p-store --out ./out.bin --listen 127.0.0.1:9002 [--seed-after-download] [--peers ...] [--lan] [--tracker http://127.0.0.1:7000]
   p2p status --manifest .p2p/<contentId>/manifest.json --store-dir .p2p-store`)
 }
