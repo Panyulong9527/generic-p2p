@@ -6,4 +6,8 @@
 *.out.log
 *.err.log
 *.exe
+*.exe~
 *.bin
+sample.txt
+smoke-*.txt
+multi-peer-*.txt
