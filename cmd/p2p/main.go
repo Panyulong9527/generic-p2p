@@ -371,10 +371,16 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 		}
 
 		peerLoad.Acquire(selected.PeerID)
+		if runtime := store.RuntimeStats(); runtime != nil {
+			_ = runtime.StartDownload(pieceIndex, selected.PeerID, time.Now())
+		}
 		peerUsage.RecordAssignment(selected.PeerID)
 		client := p2pnet.NewClient(selected.PeerID, 10*time.Second)
 		data, err := client.FetchPiece(manifest.ContentID, pieceIndex)
 		peerLoad.Release(selected.PeerID)
+		if runtime := store.RuntimeStats(); runtime != nil {
+			_ = runtime.FinishDownload(pieceIndex)
+		}
 		if err != nil {
 			cooldown := peerHealth.MarkFailure(selected.PeerID, time.Now())
 			logger.Error("piece_download_failed",
@@ -868,6 +874,12 @@ func printPrettyStatus(status core.StoreStatus) {
 		formatBytes(status.PathStats.DirectBytes),
 		formatBytes(status.PathStats.RelayBytes),
 	)
+	if len(status.ActiveDownloads) > 0 {
+		fmt.Println("activeDownloads")
+		for _, active := range status.ActiveDownloads {
+			fmt.Printf("  piece=%d peer=%s started=%s\n", active.PieceIndex, active.PeerID, active.StartedAt)
+		}
+	}
 
 	if len(status.PeerStats) == 0 {
 		fmt.Println("peerStats none")

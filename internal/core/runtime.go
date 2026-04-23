@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
+	"time"
 )
 
 type RuntimeStats struct {
@@ -14,13 +16,14 @@ type RuntimeStats struct {
 }
 
 type RuntimeData struct {
-	DownloadBytes int64                `json:"downloadBytes"`
-	UploadBytes   int64                `json:"uploadBytes"`
-	DownloadRate  int64                `json:"downloadRate"`
-	UploadRate    int64                `json:"uploadRate"`
-	Peers         int                  `json:"peers"`
-	PathStats     PathStats            `json:"pathStats"`
-	PeerStats     map[string]PeerStats `json:"peerStats,omitempty"`
+	DownloadBytes   int64                `json:"downloadBytes"`
+	UploadBytes     int64                `json:"uploadBytes"`
+	DownloadRate    int64                `json:"downloadRate"`
+	UploadRate      int64                `json:"uploadRate"`
+	Peers           int                  `json:"peers"`
+	PathStats       PathStats            `json:"pathStats"`
+	PeerStats       map[string]PeerStats `json:"peerStats,omitempty"`
+	ActiveDownloads []ActiveDownload     `json:"activeDownloads,omitempty"`
 }
 
 type PeerStats struct {
@@ -28,6 +31,12 @@ type PeerStats struct {
 	UploadedBytes    int64 `json:"uploadedBytes"`
 	DownloadedPieces int   `json:"downloadedPieces"`
 	UploadedPieces   int   `json:"uploadedPieces"`
+}
+
+type ActiveDownload struct {
+	PieceIndex int    `json:"pieceIndex"`
+	PeerID     string `json:"peerId"`
+	StartedAt  string `json:"startedAt"`
 }
 
 func OpenRuntimeStats(root string) (*RuntimeStats, error) {
@@ -68,6 +77,30 @@ func (r *RuntimeStats) RecordDownload(bytes int64, path string, peerID string) e
 	stats.DownloadedBytes += bytes
 	stats.DownloadedPieces++
 	r.data.PeerStats[peerID] = stats
+	return r.saveLocked()
+}
+
+func (r *RuntimeStats) StartDownload(pieceIndex int, peerID string, startedAt time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.data.ActiveDownloads = removeActiveDownload(r.data.ActiveDownloads, pieceIndex)
+	r.data.ActiveDownloads = append(r.data.ActiveDownloads, ActiveDownload{
+		PieceIndex: pieceIndex,
+		PeerID:     peerID,
+		StartedAt:  startedAt.Format(time.RFC3339),
+	})
+	sort.Slice(r.data.ActiveDownloads, func(i, j int) bool {
+		return r.data.ActiveDownloads[i].PieceIndex < r.data.ActiveDownloads[j].PieceIndex
+	})
+	return r.saveLocked()
+}
+
+func (r *RuntimeStats) FinishDownload(pieceIndex int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.data.ActiveDownloads = removeActiveDownload(r.data.ActiveDownloads, pieceIndex)
 	return r.saveLocked()
 }
 
@@ -119,4 +152,19 @@ func ensurePeerStatsMap(data *RuntimeData) {
 	if data.PeerStats == nil {
 		data.PeerStats = make(map[string]PeerStats)
 	}
+}
+
+func removeActiveDownload(active []ActiveDownload, pieceIndex int) []ActiveDownload {
+	if len(active) == 0 {
+		return active
+	}
+
+	filtered := active[:0]
+	for _, item := range active {
+		if item.PieceIndex == pieceIndex {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
 }

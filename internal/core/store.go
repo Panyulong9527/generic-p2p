@@ -31,6 +31,7 @@ type StoreStatus struct {
 	Peers           int                  `json:"peers"`
 	PathStats       PathStats            `json:"pathStats"`
 	PeerStats       map[string]PeerStats `json:"peerStats,omitempty"`
+	ActiveDownloads []ActiveDownload     `json:"activeDownloads,omitempty"`
 }
 
 func (s StoreStatus) Progress() float64 {
@@ -159,6 +160,7 @@ func (s *PieceStore) Status() StoreStatus {
 		Peers:           runtimeSnapshot(s.runtime).Peers,
 		PathStats:       mergePathStats(runtimeSnapshot(s.runtime).PathStats, downloadBytes),
 		PeerStats:       runtimeSnapshot(s.runtime).PeerStats,
+		ActiveDownloads: runtimeSnapshot(s.runtime).ActiveDownloads,
 	}
 }
 
