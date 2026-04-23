@@ -15,7 +15,7 @@ func TestRuntimeStatsPersist(t *testing.T) {
 	if err := stats.SetPeers(3); err != nil {
 		t.Fatal(err)
 	}
-	if err := stats.StartDownload(7, "peer-a", time.Unix(1700000000, 0)); err != nil {
+	if err := stats.StartDownload(7, "peer-a", 2, time.Unix(1700000000, 0)); err != nil {
 		t.Fatal(err)
 	}
 	if err := stats.RecordDownload(100, "lan", "peer-a"); err != nil {
@@ -72,7 +72,7 @@ func TestRuntimeStatsPersistsActiveDownloads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stats.StartDownload(3, "peer-z", time.Unix(1700000001, 0)); err != nil {
+	if err := stats.StartDownload(3, "peer-z", 4, time.Unix(1700000001, 0)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -84,7 +84,7 @@ func TestRuntimeStatsPersistsActiveDownloads(t *testing.T) {
 	if len(snapshot.ActiveDownloads) != 1 {
 		t.Fatalf("expected one active download, got %+v", snapshot.ActiveDownloads)
 	}
-	if snapshot.ActiveDownloads[0].PieceIndex != 3 || snapshot.ActiveDownloads[0].PeerID != "peer-z" {
+	if snapshot.ActiveDownloads[0].PieceIndex != 3 || snapshot.ActiveDownloads[0].PeerID != "peer-z" || snapshot.ActiveDownloads[0].WorkerID != 4 {
 		t.Fatalf("unexpected active download: %+v", snapshot.ActiveDownloads[0])
 	}
 }

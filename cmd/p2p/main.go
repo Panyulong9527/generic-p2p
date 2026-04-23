@@ -312,7 +312,7 @@ func downloadPieces(logger *logging.Logger, manifest *core.ContentManifest, stor
 					continue
 				}
 
-				err = downloadSinglePiece(logger, manifest, store, discovery, pieceIndex, peerHealth, discoveryCache, peerLoad, peerUsage)
+				err = downloadSinglePiece(logger, manifest, store, discovery, pieceIndex, id, peerHealth, discoveryCache, peerLoad, peerUsage)
 
 				state.mu.Lock()
 				delete(state.inProgress, pieceIndex)
@@ -344,7 +344,7 @@ func downloadPieces(logger *logging.Logger, manifest *core.ContentManifest, stor
 	}
 }
 
-func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest, store *core.PieceStore, discovery peerDiscoveryOptions, pieceIndex int, peerHealth *peerHealthState, discoveryCache *peerDiscoveryCache, peerLoad *peerLoadState, peerUsage *peerUsageState) error {
+func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest, store *core.PieceStore, discovery peerDiscoveryOptions, pieceIndex int, workerID int, peerHealth *peerHealthState, discoveryCache *peerDiscoveryCache, peerLoad *peerLoadState, peerUsage *peerUsageState) error {
 	chooser := scheduler.Scheduler{}
 	excluded := make(map[string]bool)
 
@@ -372,7 +372,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 
 		peerLoad.Acquire(selected.PeerID)
 		if runtime := store.RuntimeStats(); runtime != nil {
-			_ = runtime.StartDownload(pieceIndex, selected.PeerID, time.Now())
+			_ = runtime.StartDownload(pieceIndex, selected.PeerID, workerID, time.Now())
 		}
 		peerUsage.RecordAssignment(selected.PeerID)
 		client := p2pnet.NewClient(selected.PeerID, 10*time.Second)
@@ -876,8 +876,16 @@ func printPrettyStatus(status core.StoreStatus) {
 	)
 	if len(status.ActiveDownloads) > 0 {
 		fmt.Println("activeDownloads")
+		now := time.Now()
 		for _, active := range status.ActiveDownloads {
-			fmt.Printf("  piece=%d peer=%s started=%s\n", active.PieceIndex, active.PeerID, active.StartedAt)
+			fmt.Printf(
+				"  worker=%d piece=%d peer=%s age=%s started=%s\n",
+				active.WorkerID,
+				active.PieceIndex,
+				active.PeerID,
+				activeDownloadAge(active, now),
+				active.StartedAt,
+			)
 		}
 	}
 
@@ -939,6 +947,30 @@ func formatBytes(value int64) string {
 
 	suffixes := []string{"KiB", "MiB", "GiB", "TiB", "PiB", "EiB"}
 	return fmt.Sprintf("%.1f %s", float64(value)/float64(div), suffixes[exp])
+}
+
+func activeDownloadAge(active core.ActiveDownload, now time.Time) string {
+	startedAt, err := time.Parse(time.RFC3339, active.StartedAt)
+	if err != nil {
+		return "unknown"
+	}
+	if now.Before(startedAt) {
+		return "0s"
+	}
+	return formatDuration(now.Sub(startedAt))
+}
+
+func formatDuration(value time.Duration) string {
+	if value < time.Second {
+		return value.Truncate(time.Millisecond).String()
+	}
+	if value < time.Minute {
+		return value.Truncate(time.Second).String()
+	}
+	if value < time.Hour {
+		return value.Truncate(time.Second).String()
+	}
+	return value.Truncate(time.Minute).String()
 }
 
 func printUsage() {

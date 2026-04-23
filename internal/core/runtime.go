@@ -36,6 +36,7 @@ type PeerStats struct {
 type ActiveDownload struct {
 	PieceIndex int    `json:"pieceIndex"`
 	PeerID     string `json:"peerId"`
+	WorkerID   int    `json:"workerId"`
 	StartedAt  string `json:"startedAt"`
 }
 
@@ -80,7 +81,7 @@ func (r *RuntimeStats) RecordDownload(bytes int64, path string, peerID string) e
 	return r.saveLocked()
 }
 
-func (r *RuntimeStats) StartDownload(pieceIndex int, peerID string, startedAt time.Time) error {
+func (r *RuntimeStats) StartDownload(pieceIndex int, peerID string, workerID int, startedAt time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -88,9 +89,13 @@ func (r *RuntimeStats) StartDownload(pieceIndex int, peerID string, startedAt ti
 	r.data.ActiveDownloads = append(r.data.ActiveDownloads, ActiveDownload{
 		PieceIndex: pieceIndex,
 		PeerID:     peerID,
+		WorkerID:   workerID,
 		StartedAt:  startedAt.Format(time.RFC3339),
 	})
 	sort.Slice(r.data.ActiveDownloads, func(i, j int) bool {
+		if r.data.ActiveDownloads[i].WorkerID != r.data.ActiveDownloads[j].WorkerID {
+			return r.data.ActiveDownloads[i].WorkerID < r.data.ActiveDownloads[j].WorkerID
+		}
 		return r.data.ActiveDownloads[i].PieceIndex < r.data.ActiveDownloads[j].PieceIndex
 	})
 	return r.saveLocked()
