@@ -242,4 +242,41 @@ func TestTrackerWebShareUploadListAndDownload(t *testing.T) {
 	if string(downloaded) != "hello lan share" {
 		t.Fatalf("unexpected downloaded content: %q", string(downloaded))
 	}
+
+	deleteReq, err := http.NewRequest(http.MethodDelete, httpServer.URL+"/v1/web/shares/"+share.ContentID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleteResp, err := http.DefaultClient.Do(deleteReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer deleteResp.Body.Close()
+	if deleteResp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected delete status: %s", deleteResp.Status)
+	}
+
+	listAfterDeleteResp, err := http.Get(httpServer.URL + "/v1/web/shares")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listAfterDeleteResp.Body.Close()
+	var listAfterDeleteBody struct {
+		Shares []WebShare `json:"shares"`
+	}
+	if err := json.NewDecoder(listAfterDeleteResp.Body).Decode(&listAfterDeleteBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(listAfterDeleteBody.Shares) != 0 {
+		t.Fatalf("expected no shares after delete, got %#v", listAfterDeleteBody.Shares)
+	}
+
+	deletedDownloadResp, err := http.Get(httpServer.URL + share.DownloadPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer deletedDownloadResp.Body.Close()
+	if deletedDownloadResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected deleted download to be missing, got %s", deletedDownloadResp.Status)
+	}
 }

@@ -62,13 +62,27 @@ func (s *Server) handleWebShares(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleWebShareFile(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/v1/web/shares/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+
+	if r.Method == http.MethodDelete {
+		if len(parts) != 1 || parts[0] == "" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := s.deleteWebShare(parts[0]); err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		writeJSON(w, map[string]string{"status": "deleted"})
+		return
+	}
+
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	path := strings.TrimPrefix(r.URL.Path, "/v1/web/shares/")
-	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) != 2 {
 		http.NotFound(w, r)
 		return
@@ -220,6 +234,26 @@ func (s *Server) saveWebShare(share WebShare) error {
 		return err
 	}
 	index.Shares[share.ContentID] = share
+	return s.saveWebShareIndexLocked(index)
+}
+
+func (s *Server) deleteWebShare(contentID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	index, err := s.loadWebShareIndexLocked()
+	if err != nil {
+		return err
+	}
+	if _, ok := index.Shares[contentID]; !ok {
+		return fmt.Errorf("share not found: %s", contentID)
+	}
+	delete(index.Shares, contentID)
+
+	shareDir := filepath.Join(s.effectiveWebDataDir(), "shares", contentID)
+	if err := os.RemoveAll(shareDir); err != nil {
+		return err
+	}
 	return s.saveWebShareIndexLocked(index)
 }
 
@@ -427,6 +461,13 @@ const webAppHTML = `<!doctype html>
       background: #e8eee9;
       color: var(--ink);
     }
+    button.danger {
+      background: #9f3a2f;
+      color: #fff;
+    }
+    button.danger:hover {
+      background: #7a2b23;
+    }
     .status {
       min-height: 24px;
       color: var(--muted);
@@ -608,7 +649,9 @@ const webAppHTML = `<!doctype html>
           '</div>' +
           '<div class="actions">' +
             '<a class="button" href="' + share.downloadPath + '">Download</a>' +
+            '<button class="secondary" type="button" data-action="copy" data-url="' + escapeHTML(share.downloadPath) + '">Copy link</button>' +
             '<a class="button secondary" href="' + share.manifestPath + '">manifest</a>' +
+            '<button class="danger" type="button" data-action="delete" data-content-id="' + escapeHTML(share.contentId) + '">Delete</button>' +
           '</div>' +
         '</article>'
       ).join("");
@@ -663,6 +706,24 @@ const webAppHTML = `<!doctype html>
       const response = await fetch("/v1/status");
       if (!response.ok) throw new Error(await response.text());
       renderTrackerStatus(await response.json());
+    }
+
+    async function deleteShare(contentId) {
+      const response = await fetch("/v1/web/shares/" + encodeURIComponent(contentId), { method: "DELETE" });
+      if (!response.ok) throw new Error(await response.text());
+    }
+
+    async function copyText(value) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(value);
+        return;
+      }
+      const input = document.createElement("input");
+      input.value = value;
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand("copy");
+      input.remove();
     }
 
     function uploadSelectedFile(file) {
@@ -726,6 +787,37 @@ const webAppHTML = `<!doctype html>
       if (!event.dataTransfer.files.length) return;
       fileInput.files = event.dataTransfer.files;
       uploadStatus.textContent = "Ready: " + event.dataTransfer.files[0].name;
+    });
+    sharesEl.addEventListener("click", async (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+
+      const action = target.dataset.action;
+      if (action === "copy") {
+        const fullURL = new URL(target.dataset.url || "", window.location.href).toString();
+        try {
+          await copyText(fullURL);
+          uploadStatus.textContent = "Copied: " + fullURL;
+        } catch (error) {
+          uploadStatus.textContent = error.message || String(error);
+        }
+        return;
+      }
+
+      if (action === "delete") {
+        const contentId = target.dataset.contentId || "";
+        if (!contentId || !window.confirm("Delete this shared file from the tracker machine?")) return;
+        target.disabled = true;
+        try {
+          await deleteShare(contentId);
+          uploadStatus.textContent = "Deleted share.";
+          await refreshShares();
+        } catch (error) {
+          uploadStatus.textContent = error.message || String(error);
+        } finally {
+          target.disabled = false;
+        }
+      }
     });
     refreshButton.addEventListener("click", () => refreshAll().catch((error) => {
       trackerStatusEl.innerHTML = '<div class="empty">' + escapeHTML(error.message || String(error)) + '</div>';
