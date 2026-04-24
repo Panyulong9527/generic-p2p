@@ -23,6 +23,7 @@ func downloadPieces(logger *logging.Logger, manifest *core.ContentManifest, stor
 	}
 	peerHealth := newPeerHealthState()
 	discoveryCache := newPeerDiscoveryCache(400 * time.Millisecond)
+	udpProbes := newUDPProbeCache(2 * time.Second)
 	peerLoad := newPeerLoadState()
 	peerUsage := newPeerUsageState()
 
@@ -44,7 +45,7 @@ func downloadPieces(logger *logging.Logger, manifest *core.ContentManifest, stor
 				default:
 				}
 
-				peerCandidates, err := collectDynamicPeerCandidates(logger, discovery, peerHealth, discoveryCache, nil, peerLoad, peerUsage)
+				peerCandidates, err := collectDynamicPeerCandidates(logger, discovery, peerHealth, discoveryCache, udpProbes, nil, peerLoad, peerUsage)
 				if err != nil {
 					if allPiecesCompleted(manifest, store) {
 						return
@@ -65,7 +66,7 @@ func downloadPieces(logger *logging.Logger, manifest *core.ContentManifest, stor
 					continue
 				}
 
-				err = downloadSinglePiece(logger, manifest, store, discovery, pieceIndex, id, peerHealth, discoveryCache, peerLoad, peerUsage)
+				err = downloadSinglePiece(logger, manifest, store, discovery, pieceIndex, id, peerHealth, discoveryCache, udpProbes, peerLoad, peerUsage)
 
 				state.mu.Lock()
 				delete(state.inProgress, pieceIndex)
@@ -97,12 +98,12 @@ func downloadPieces(logger *logging.Logger, manifest *core.ContentManifest, stor
 	}
 }
 
-func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest, store *core.PieceStore, discovery peerDiscoveryOptions, pieceIndex int, workerID int, peerHealth *peerHealthState, discoveryCache *peerDiscoveryCache, peerLoad *peerLoadState, peerUsage *peerUsageState) error {
+func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest, store *core.PieceStore, discovery peerDiscoveryOptions, pieceIndex int, workerID int, peerHealth *peerHealthState, discoveryCache *peerDiscoveryCache, udpProbes *udpProbeCache, peerLoad *peerLoadState, peerUsage *peerUsageState) error {
 	chooser := scheduler.Scheduler{}
 	excluded := make(map[string]bool)
 
 	for attempt := 0; attempt < 5; attempt++ {
-		peerCandidates, err := collectDynamicPeerCandidates(logger, discovery, peerHealth, discoveryCache, excluded, peerLoad, peerUsage)
+		peerCandidates, err := collectDynamicPeerCandidates(logger, discovery, peerHealth, discoveryCache, udpProbes, excluded, peerLoad, peerUsage)
 		if err != nil {
 			if attempt == 4 {
 				return fmt.Errorf("piece %d candidate refresh failed: %w", pieceIndex, err)

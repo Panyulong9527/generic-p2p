@@ -116,7 +116,7 @@ func appendUnique(base []string, values ...string) []string {
 	return base
 }
 
-func collectDynamicPeerCandidates(logger *logging.Logger, options peerDiscoveryOptions, peerHealth *peerHealthState, discoveryCache *peerDiscoveryCache, excluded map[string]bool, peerLoad *peerLoadState, peerUsage *peerUsageState) ([]scheduler.PeerCandidate, error) {
+func collectDynamicPeerCandidates(logger *logging.Logger, options peerDiscoveryOptions, peerHealth *peerHealthState, discoveryCache *peerDiscoveryCache, udpProbes *udpProbeCache, excluded map[string]bool, peerLoad *peerLoadState, peerUsage *peerUsageState) ([]scheduler.PeerCandidate, error) {
 	now := time.Now()
 	var candidates []scheduler.PeerCandidate
 	if discoveryCache != nil {
@@ -149,7 +149,7 @@ func collectDynamicPeerCandidates(logger *logging.Logger, options peerDiscoveryO
 		udpPeerAddrs = appendUnique(udpPeerAddrs, discoveredUDPAddrs...)
 	}
 
-	freshCandidates, err := collectPeerCandidates(logger, options.contentID, peerAddrs, udpPeerAddrs, peerHealth)
+	freshCandidates, err := collectPeerCandidates(logger, options.contentID, peerAddrs, udpPeerAddrs, peerHealth, udpProbes)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +160,7 @@ func collectDynamicPeerCandidates(logger *logging.Logger, options peerDiscoveryO
 	return filterPeerCandidates(logger, options.contentID, candidates, peerHealth, excluded, now, peerLoad, peerUsage)
 }
 
-func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs []string, udpPeerAddrs []string, peerHealth *peerHealthState) ([]scheduler.PeerCandidate, error) {
+func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs []string, udpPeerAddrs []string, peerHealth *peerHealthState, udpProbes *udpProbeCache) ([]scheduler.PeerCandidate, error) {
 	candidates := make([]scheduler.PeerCandidate, 0, len(peerAddrs)+len(udpPeerAddrs))
 	for _, addr := range peerAddrs {
 		client := p2pnet.NewClient(addr, 10*time.Second)
@@ -194,20 +194,30 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 	for _, addr := range udpPeerAddrs {
 		peerID := "udp://" + addr
 		client := p2pnet.NewUDPClient(addr, 10*time.Second)
-		if err := client.Probe(); err != nil {
-			var cooldown time.Duration
-			if peerHealth != nil {
-				cooldown = peerHealth.MarkFailure(peerID, time.Now())
+		now := time.Now()
+		if ok, cached := udpProbes.Load(addr, now); cached {
+			if !ok {
+				logger.Info("udp_peer_probe_cached_failed", "contentId", contentID, "peer", peerID)
+				continue
 			}
-			logger.Error("udp_peer_probe_failed",
-				"contentId", contentID,
-				"peer", peerID,
-				"cooldownMs", cooldown.Milliseconds(),
-				"error", err.Error(),
-			)
-			continue
+		} else {
+			if err := client.Probe(); err != nil {
+				udpProbes.Store(addr, false, now)
+				var cooldown time.Duration
+				if peerHealth != nil {
+					cooldown = peerHealth.MarkFailure(peerID, now)
+				}
+				logger.Error("udp_peer_probe_failed",
+					"contentId", contentID,
+					"peer", peerID,
+					"cooldownMs", cooldown.Milliseconds(),
+					"error", err.Error(),
+				)
+				continue
+			}
+			udpProbes.Store(addr, true, now)
+			logger.Info("udp_peer_probe_ok", "contentId", contentID, "peer", peerID)
 		}
-		logger.Info("udp_peer_probe_ok", "contentId", contentID, "peer", peerID)
 		haveRanges, err := client.FetchHave(contentID)
 		if err != nil {
 			var cooldown time.Duration
