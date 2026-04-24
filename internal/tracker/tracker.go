@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +43,7 @@ type Server struct {
 	swarms          map[string]map[string]bool
 	peerTTL         time.Duration
 	cleanupInterval time.Duration
+	statePath       string
 }
 
 func NewServer() *Server {
@@ -52,6 +55,11 @@ func NewServer() *Server {
 	}
 }
 
+func (s *Server) WithStatePath(statePath string) *Server {
+	s.statePath = statePath
+	return s
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/peers/register", s.handleRegister)
@@ -61,6 +69,10 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
+	if err := s.loadState(); err != nil {
+		return err
+	}
+
 	httpServer := &http.Server{
 		Addr:    addr,
 		Handler: s.Handler(),
@@ -109,6 +121,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	record.Addrs = req.Addrs
 	record.LastSeenAt = time.Now().Unix()
 	s.peers[req.PeerID] = record
+	if err := s.saveLocked(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	writeJSON(w, map[string]string{"status": "ok"})
 }
@@ -143,6 +159,10 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 		s.swarms[req.ContentID] = make(map[string]bool)
 	}
 	s.swarms[req.ContentID][req.PeerID] = true
+	if err := s.saveLocked(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	writeJSON(w, map[string]string{"status": "ok"})
 }
@@ -195,6 +215,7 @@ func (s *Server) cleanupLoop(ctx context.Context) {
 		case now := <-ticker.C:
 			s.mu.Lock()
 			s.pruneExpiredLocked(now)
+			_ = s.saveLocked()
 			s.mu.Unlock()
 		}
 	}
@@ -222,6 +243,77 @@ func (s *Server) pruneExpiredLocked(now time.Time) {
 			}
 		}
 	}
+}
+
+type persistedState struct {
+	Peers  map[string]PeerRecord `json:"peers"`
+	Swarms map[string][]string   `json:"swarms"`
+}
+
+func (s *Server) loadState() error {
+	if strings.TrimSpace(s.statePath) == "" {
+		return nil
+	}
+
+	data, err := os.ReadFile(s.statePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	var state persistedState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if state.Peers != nil {
+		s.peers = state.Peers
+	}
+	if state.Swarms != nil {
+		s.swarms = make(map[string]map[string]bool, len(state.Swarms))
+		for contentID, peerIDs := range state.Swarms {
+			peerSet := make(map[string]bool, len(peerIDs))
+			for _, peerID := range peerIDs {
+				peerSet[peerID] = true
+			}
+			s.swarms[contentID] = peerSet
+		}
+	}
+	s.pruneExpiredLocked(time.Now())
+	return nil
+}
+
+func (s *Server) saveLocked() error {
+	if strings.TrimSpace(s.statePath) == "" {
+		return nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(s.statePath), 0o755); err != nil {
+		return err
+	}
+
+	state := persistedState{
+		Peers:  s.peers,
+		Swarms: make(map[string][]string, len(s.swarms)),
+	}
+	for contentID, peerSet := range s.swarms {
+		peerIDs := make([]string, 0, len(peerSet))
+		for peerID := range peerSet {
+			peerIDs = append(peerIDs, peerID)
+		}
+		state.Swarms[contentID] = peerIDs
+	}
+
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.statePath, data, 0o644)
 }
 
 func writeJSON(w http.ResponseWriter, value any) {

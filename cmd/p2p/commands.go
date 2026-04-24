@@ -309,12 +309,13 @@ func runServe(logger *logging.Logger, args []string) error {
 func runTracker(logger *logging.Logger, args []string) error {
 	fs := flag.NewFlagSet("tracker", flag.ContinueOnError)
 	listen := fs.String("listen", "127.0.0.1:7000", "tracker listen address")
+	stateFile := fs.String("state-file", ".p2p-tracker-state.json", "tracker state file path")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	server := tracker.NewServer()
-	logger.Info("tracker_ready", "listen", *listen)
+	server := tracker.NewServer().WithStatePath(*stateFile)
+	logger.Info("tracker_ready", "listen", *listen, "stateFile", *stateFile)
 	return server.ListenAndServe(context.Background(), *listen)
 }

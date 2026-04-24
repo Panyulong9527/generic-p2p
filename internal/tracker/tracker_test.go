@@ -70,3 +70,35 @@ func TestTrackerPrunesExpiredPeers(t *testing.T) {
 		t.Fatalf("expected expired peers to be pruned, got %d", len(peers))
 	}
 }
+
+func TestTrackerPersistsAndReloadsState(t *testing.T) {
+	statePath := t.TempDir() + "\\tracker-state.json"
+
+	server := NewServer().WithStatePath(statePath)
+	server.cleanupInterval = 0
+	httpServer := httptest.NewServer(server.Handler())
+
+	client := NewClient(httpServer.URL)
+	ctx := context.Background()
+
+	if err := client.RegisterPeer(ctx, "peer-a", []string{"127.0.0.1:9001"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.JoinSwarm(ctx, "peer-a", "sha256-demo", []core.HaveRange{{Start: 0, End: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	httpServer.Close()
+
+	reloaded := NewServer().WithStatePath(statePath)
+	reloaded.cleanupInterval = 0
+	if err := reloaded.loadState(); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := reloaded.peers["peer-a"].PeerID; got != "peer-a" {
+		t.Fatalf("expected persisted peer, got %q", got)
+	}
+	if !reloaded.swarms["sha256-demo"]["peer-a"] {
+		t.Fatal("expected persisted swarm membership")
+	}
+}
