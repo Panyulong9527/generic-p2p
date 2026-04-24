@@ -12,10 +12,12 @@ func TestRuntimeStatsPersist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	baseTime := time.Unix(1700000000, 0)
+	stats.now = func() time.Time { return baseTime }
 	if err := stats.SetPeers(3); err != nil {
 		t.Fatal(err)
 	}
-	if err := stats.StartDownload(7, "peer-a", 2, time.Unix(1700000000, 0)); err != nil {
+	if err := stats.StartDownload(7, "peer-a", 2, baseTime); err != nil {
 		t.Fatal(err)
 	}
 	if err := stats.RecordDownload(100, "lan", "peer-a"); err != nil {
@@ -32,6 +34,7 @@ func TestRuntimeStatsPersist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	reopened.now = func() time.Time { return baseTime }
 	snapshot := reopened.Snapshot()
 	if snapshot.Peers != 3 {
 		t.Fatalf("unexpected peers: %d", snapshot.Peers)
@@ -41,6 +44,12 @@ func TestRuntimeStatsPersist(t *testing.T) {
 	}
 	if snapshot.UploadBytes != 50 {
 		t.Fatalf("unexpected upload bytes: %d", snapshot.UploadBytes)
+	}
+	if snapshot.DownloadRate != 100 {
+		t.Fatalf("unexpected download rate: %d", snapshot.DownloadRate)
+	}
+	if snapshot.UploadRate != 50 {
+		t.Fatalf("unexpected upload rate: %d", snapshot.UploadRate)
 	}
 	if snapshot.PathStats.LANBytes != 100 {
 		t.Fatalf("unexpected lan bytes: %d", snapshot.PathStats.LANBytes)
@@ -86,5 +95,30 @@ func TestRuntimeStatsPersistsActiveDownloads(t *testing.T) {
 	}
 	if snapshot.ActiveDownloads[0].PieceIndex != 3 || snapshot.ActiveDownloads[0].PeerID != "peer-z" || snapshot.ActiveDownloads[0].WorkerID != 4 {
 		t.Fatalf("unexpected active download: %+v", snapshot.ActiveDownloads[0])
+	}
+}
+
+func TestRuntimeStatsRateFallsToZeroAfterWindow(t *testing.T) {
+	dir := t.TempDir()
+
+	stats, err := OpenRuntimeStats(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	currentTime := time.Unix(1700000100, 0)
+	stats.now = func() time.Time { return currentTime }
+
+	if err := stats.RecordDownload(500, "lan", "peer-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := stats.Snapshot().DownloadRate; got != 500 {
+		t.Fatalf("expected initial download rate 500, got %d", got)
+	}
+
+	currentTime = currentTime.Add(6 * time.Second)
+	if got := stats.Snapshot().DownloadRate; got != 0 {
+		t.Fatalf("expected stale download rate to decay to 0, got %d", got)
 	}
 }

@@ -13,6 +13,7 @@ type RuntimeStats struct {
 	mu   sync.Mutex
 	path string
 	data RuntimeData
+	now  func() time.Time
 }
 
 type RuntimeData struct {
@@ -24,6 +25,8 @@ type RuntimeData struct {
 	PathStats       PathStats            `json:"pathStats"`
 	PeerStats       map[string]PeerStats `json:"peerStats,omitempty"`
 	ActiveDownloads []ActiveDownload     `json:"activeDownloads,omitempty"`
+	DownloadSamples []transferSample     `json:"downloadSamples,omitempty"`
+	UploadSamples   []transferSample     `json:"uploadSamples,omitempty"`
 }
 
 type PeerStats struct {
@@ -40,6 +43,13 @@ type ActiveDownload struct {
 	StartedAt  string `json:"startedAt"`
 }
 
+type transferSample struct {
+	AtUnixMilli int64 `json:"atUnixMilli"`
+	Bytes       int64 `json:"bytes"`
+}
+
+const rateWindow = 5 * time.Second
+
 func OpenRuntimeStats(root string) (*RuntimeStats, error) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
@@ -47,6 +57,7 @@ func OpenRuntimeStats(root string) (*RuntimeStats, error) {
 
 	stats := &RuntimeStats{
 		path: filepath.Join(root, "runtime.json"),
+		now:  time.Now,
 	}
 	if err := stats.load(); err != nil {
 		return nil, err
@@ -57,7 +68,14 @@ func OpenRuntimeStats(root string) (*RuntimeStats, error) {
 func (r *RuntimeStats) Snapshot() RuntimeData {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.data
+
+	snapshot := cloneRuntimeData(r.data)
+	now := r.now()
+	snapshot.DownloadSamples = pruneSamples(snapshot.DownloadSamples, now, rateWindow)
+	snapshot.UploadSamples = pruneSamples(snapshot.UploadSamples, now, rateWindow)
+	snapshot.DownloadRate = calculateRate(snapshot.DownloadSamples, now)
+	snapshot.UploadRate = calculateRate(snapshot.UploadSamples, now)
+	return snapshot
 }
 
 func (r *RuntimeStats) SetPeers(peers int) error {
@@ -70,14 +88,21 @@ func (r *RuntimeStats) SetPeers(peers int) error {
 func (r *RuntimeStats) RecordDownload(bytes int64, path string, peerID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	now := r.now()
 	r.data.DownloadBytes += bytes
-	r.data.DownloadRate = bytes
 	applyPathBytes(&r.data.PathStats, path, bytes)
 	ensurePeerStatsMap(&r.data)
 	stats := r.data.PeerStats[peerID]
 	stats.DownloadedBytes += bytes
 	stats.DownloadedPieces++
 	r.data.PeerStats[peerID] = stats
+	r.data.DownloadSamples = append(r.data.DownloadSamples, transferSample{
+		AtUnixMilli: now.UnixMilli(),
+		Bytes:       bytes,
+	})
+	r.data.DownloadSamples = pruneSamples(r.data.DownloadSamples, now, rateWindow)
+	r.data.DownloadRate = calculateRate(r.data.DownloadSamples, now)
 	return r.saveLocked()
 }
 
@@ -112,14 +137,21 @@ func (r *RuntimeStats) FinishDownload(pieceIndex int) error {
 func (r *RuntimeStats) RecordUpload(bytes int64, path string, peerID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	now := r.now()
 	r.data.UploadBytes += bytes
-	r.data.UploadRate = bytes
 	applyPathBytes(&r.data.PathStats, path, bytes)
 	ensurePeerStatsMap(&r.data)
 	stats := r.data.PeerStats[peerID]
 	stats.UploadedBytes += bytes
 	stats.UploadedPieces++
 	r.data.PeerStats[peerID] = stats
+	r.data.UploadSamples = append(r.data.UploadSamples, transferSample{
+		AtUnixMilli: now.UnixMilli(),
+		Bytes:       bytes,
+	})
+	r.data.UploadSamples = pruneSamples(r.data.UploadSamples, now, rateWindow)
+	r.data.UploadRate = calculateRate(r.data.UploadSamples, now)
 	return r.saveLocked()
 }
 
@@ -157,6 +189,60 @@ func ensurePeerStatsMap(data *RuntimeData) {
 	if data.PeerStats == nil {
 		data.PeerStats = make(map[string]PeerStats)
 	}
+}
+
+func pruneSamples(samples []transferSample, now time.Time, window time.Duration) []transferSample {
+	if len(samples) == 0 {
+		return nil
+	}
+
+	cutoff := now.Add(-window).UnixMilli()
+	filtered := samples[:0]
+	for _, sample := range samples {
+		if sample.AtUnixMilli < cutoff {
+			continue
+		}
+		filtered = append(filtered, sample)
+	}
+	return filtered
+}
+
+func calculateRate(samples []transferSample, now time.Time) int64 {
+	if len(samples) == 0 {
+		return 0
+	}
+
+	var total int64
+	for _, sample := range samples {
+		total += sample.Bytes
+	}
+
+	oldest := time.UnixMilli(samples[0].AtUnixMilli)
+	elapsed := now.Sub(oldest)
+	if elapsed < time.Second {
+		elapsed = time.Second
+	}
+	return int64(float64(total) / elapsed.Seconds())
+}
+
+func cloneRuntimeData(input RuntimeData) RuntimeData {
+	output := input
+	if len(input.ActiveDownloads) > 0 {
+		output.ActiveDownloads = append([]ActiveDownload(nil), input.ActiveDownloads...)
+	}
+	if len(input.DownloadSamples) > 0 {
+		output.DownloadSamples = append([]transferSample(nil), input.DownloadSamples...)
+	}
+	if len(input.UploadSamples) > 0 {
+		output.UploadSamples = append([]transferSample(nil), input.UploadSamples...)
+	}
+	if input.PeerStats != nil {
+		output.PeerStats = make(map[string]PeerStats, len(input.PeerStats))
+		for key, value := range input.PeerStats {
+			output.PeerStats[key] = value
+		}
+	}
+	return output
 }
 
 func removeActiveDownload(active []ActiveDownload, pieceIndex int) []ActiveDownload {
