@@ -36,15 +36,19 @@ type GetPeersResponse struct {
 }
 
 type Server struct {
-	mu     sync.Mutex
-	peers  map[string]PeerRecord
-	swarms map[string]map[string]bool
+	mu              sync.Mutex
+	peers           map[string]PeerRecord
+	swarms          map[string]map[string]bool
+	peerTTL         time.Duration
+	cleanupInterval time.Duration
 }
 
 func NewServer() *Server {
 	return &Server{
-		peers:  make(map[string]PeerRecord),
-		swarms: make(map[string]map[string]bool),
+		peers:           make(map[string]PeerRecord),
+		swarms:          make(map[string]map[string]bool),
+		peerTTL:         10 * time.Second,
+		cleanupInterval: 2 * time.Second,
 	}
 }
 
@@ -60,6 +64,10 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	httpServer := &http.Server{
 		Addr:    addr,
 		Handler: s.Handler(),
+	}
+
+	if s.cleanupInterval > 0 {
+		go s.cleanupLoop(ctx)
 	}
 
 	go func() {
@@ -94,6 +102,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.pruneExpiredLocked(time.Now())
 
 	record := s.peers[req.PeerID]
 	record.PeerID = req.PeerID
@@ -122,6 +131,7 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.pruneExpiredLocked(time.Now())
 
 	record := s.peers[req.PeerID]
 	record.PeerID = req.PeerID
@@ -157,6 +167,7 @@ func (s *Server) handleGetPeers(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.pruneExpiredLocked(time.Now())
 
 	peerIDs := s.swarms[contentID]
 	response := GetPeersResponse{
@@ -171,6 +182,46 @@ func (s *Server) handleGetPeers(w http.ResponseWriter, r *http.Request) {
 		response.Peers = append(response.Peers, record)
 	}
 	writeJSON(w, response)
+}
+
+func (s *Server) cleanupLoop(ctx context.Context) {
+	ticker := time.NewTicker(s.cleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			s.mu.Lock()
+			s.pruneExpiredLocked(now)
+			s.mu.Unlock()
+		}
+	}
+}
+
+func (s *Server) pruneExpiredLocked(now time.Time) {
+	if s.peerTTL <= 0 {
+		return
+	}
+
+	expiredPeerIDs := make([]string, 0)
+	for peerID, record := range s.peers {
+		lastSeenAt := time.Unix(record.LastSeenAt, 0)
+		if now.Sub(lastSeenAt) > s.peerTTL {
+			expiredPeerIDs = append(expiredPeerIDs, peerID)
+		}
+	}
+
+	for _, peerID := range expiredPeerIDs {
+		delete(s.peers, peerID)
+		for contentID, peerSet := range s.swarms {
+			delete(peerSet, peerID)
+			if len(peerSet) == 0 {
+				delete(s.swarms, contentID)
+			}
+		}
+	}
 }
 
 func writeJSON(w http.ResponseWriter, value any) {
