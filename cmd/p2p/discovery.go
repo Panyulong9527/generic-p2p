@@ -46,7 +46,7 @@ func discoverTrackerPeers(logger *logging.Logger, contentID string, trackerURL s
 	return addrs, nil
 }
 
-func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerURL string, selfPeerID string, selfUDPListenAddr string) ([]string, error) {
+func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerURL string, selfPeerID string, selfUDPListenAddr string, udpProbeRequests *udpProbeRequestCache) ([]string, error) {
 	client := tracker.NewClient(trackerURL)
 	peers, err := client.GetPeers(context.Background(), contentID)
 	if err != nil {
@@ -55,7 +55,8 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 
 	addrs := make([]string, 0, len(peers))
 	for _, peer := range peers {
-		if selfPeerID != "" && selfUDPListenAddr != "" && peer.PeerID != "" && peer.PeerID != selfPeerID {
+		probeRequestKey := contentID + "|" + selfPeerID + "|" + selfUDPListenAddr + "|" + peer.PeerID
+		if selfPeerID != "" && selfUDPListenAddr != "" && peer.PeerID != "" && peer.PeerID != selfPeerID && udpProbeRequests.ShouldRequest(probeRequestKey, time.Now()) {
 			if err := client.RequestUDPProbe(context.Background(), contentID, selfPeerID, selfUDPListenAddr, peer.PeerID); err != nil {
 				logger.Error("tracker_udp_probe_request_failed",
 					"contentId", contentID,
@@ -125,7 +126,7 @@ func appendUnique(base []string, values ...string) []string {
 	return base
 }
 
-func collectDynamicPeerCandidates(logger *logging.Logger, options peerDiscoveryOptions, peerHealth *peerHealthState, discoveryCache *peerDiscoveryCache, udpProbes *udpProbeCache, excluded map[string]bool, peerLoad *peerLoadState, peerUsage *peerUsageState) ([]scheduler.PeerCandidate, error) {
+func collectDynamicPeerCandidates(logger *logging.Logger, options peerDiscoveryOptions, peerHealth *peerHealthState, discoveryCache *peerDiscoveryCache, udpProbes *udpProbeCache, udpProbeRequests *udpProbeRequestCache, excluded map[string]bool, peerLoad *peerLoadState, peerUsage *peerUsageState) ([]scheduler.PeerCandidate, error) {
 	now := time.Now()
 	var candidates []scheduler.PeerCandidate
 	if discoveryCache != nil {
@@ -151,7 +152,7 @@ func collectDynamicPeerCandidates(logger *logging.Logger, options peerDiscoveryO
 	}
 	udpPeerAddrs := collectPeerAddrs(options.explicitUDPPeer, options.explicitUDPPeers)
 	if options.trackerURL != "" {
-		discoveredUDPAddrs, err := discoverTrackerUDPPeers(logger, options.contentID, options.trackerURL, options.selfListenAddr, options.selfUDPListenAddr)
+		discoveredUDPAddrs, err := discoverTrackerUDPPeers(logger, options.contentID, options.trackerURL, options.selfListenAddr, options.selfUDPListenAddr, udpProbeRequests)
 		if err != nil {
 			return nil, err
 		}
