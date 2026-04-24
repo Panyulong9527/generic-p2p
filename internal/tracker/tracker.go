@@ -37,6 +37,22 @@ type GetPeersResponse struct {
 	Peers     []PeerRecord `json:"peers"`
 }
 
+type SwarmStatus struct {
+	ContentID string       `json:"contentId"`
+	PeerCount int          `json:"peerCount"`
+	Peers     []PeerRecord `json:"peers"`
+}
+
+type StatusResponse struct {
+	GeneratedAt            string        `json:"generatedAt"`
+	PeerCount              int           `json:"peerCount"`
+	SwarmCount             int           `json:"swarmCount"`
+	PeerTTLSeconds         int           `json:"peerTtlSeconds"`
+	CleanupIntervalSeconds int           `json:"cleanupIntervalSeconds"`
+	StatePath              string        `json:"statePath,omitempty"`
+	Swarms                 []SwarmStatus `json:"swarms"`
+}
+
 type Server struct {
 	mu              sync.Mutex
 	peers           map[string]PeerRecord
@@ -65,6 +81,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/peers/register", s.handleRegister)
 	mux.HandleFunc("/v1/swarms/join", s.handleJoin)
 	mux.HandleFunc("/v1/swarms/", s.handleGetPeers)
+	mux.HandleFunc("/v1/status", s.handleStatus)
 	return mux
 }
 
@@ -221,6 +238,51 @@ func (s *Server) cleanupLoop(ctx context.Context) {
 	}
 }
 
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	writeJSON(w, s.Status())
+}
+
+func (s *Server) Status() StatusResponse {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	s.pruneExpiredLocked(now)
+
+	response := StatusResponse{
+		GeneratedAt:            now.Format(time.RFC3339),
+		PeerCount:              len(s.peers),
+		SwarmCount:             len(s.swarms),
+		PeerTTLSeconds:         int(s.peerTTL / time.Second),
+		CleanupIntervalSeconds: int(s.cleanupInterval / time.Second),
+		StatePath:              s.statePath,
+		Swarms:                 make([]SwarmStatus, 0, len(s.swarms)),
+	}
+
+	for contentID, peerSet := range s.swarms {
+		swarm := SwarmStatus{
+			ContentID: contentID,
+			PeerCount: len(peerSet),
+			Peers:     make([]PeerRecord, 0, len(peerSet)),
+		}
+		for peerID := range peerSet {
+			record := s.peers[peerID]
+			if record.PeerID == "" {
+				continue
+			}
+			swarm.Peers = append(swarm.Peers, record)
+		}
+		response.Swarms = append(response.Swarms, swarm)
+	}
+
+	return response
+}
+
 func (s *Server) pruneExpiredLocked(now time.Time) {
 	if s.peerTTL <= 0 {
 		return
@@ -373,6 +435,29 @@ func (c *Client) GetPeers(ctx context.Context, contentID string) ([]PeerRecord, 
 		return nil, err
 	}
 	return body.Peers, nil
+}
+
+func (c *Client) GetStatus(ctx context.Context) (StatusResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/status", nil)
+	if err != nil {
+		return StatusResponse{}, err
+	}
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return StatusResponse{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return StatusResponse{}, fmt.Errorf("tracker get status returned %s", resp.Status)
+	}
+
+	var body StatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return StatusResponse{}, err
+	}
+	return body, nil
 }
 
 func (c *Client) postJSON(ctx context.Context, path string, requestBody any, responseBody any) error {

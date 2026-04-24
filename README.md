@@ -14,6 +14,7 @@ The current codebase is no longer just a LAN-only smoke prototype. It contains a
 - `HAVE` ranges let peers advertise completed piece ranges.
 - LAN discovery works through UDP announcements.
 - `tracker` starts a thin tracker for peer discovery and can persist swarm state to a local JSON file.
+- `tracker-status` inspects live tracker state, including active swarms and peer ranges.
 - `serve --tracker` and `get --tracker` register and join swarms through the tracker.
 - Downloads support concurrent workers, dynamic peer refresh, rarest-first piece selection, peer cooldown, peer load tracking, and peer usage balancing.
 - `status` reports persisted progress, transfer totals, path stats, per-peer contribution stats, and active downloads.
@@ -56,6 +57,13 @@ Start the thin tracker:
 ```powershell
 p2p tracker --listen 127.0.0.1:7000
 p2p tracker --listen 127.0.0.1:7000 --state-file .\.p2p-tracker-state.json
+```
+
+Inspect tracker state:
+
+```powershell
+p2p tracker-status --tracker http://127.0.0.1:7000 --pretty
+p2p tracker-status --tracker http://127.0.0.1:7000 --watch --interval 1s
 ```
 
 Use tracker discovery:
@@ -142,6 +150,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\integration-tracker.ps1 -File
 
 - `cmd/p2p/main.go`: CLI dispatch and usage.
 - `cmd/p2p/commands.go`: command handlers for `share`, `get`, `serve`, and `tracker`.
+- `cmd/p2p/tracker_status.go`: tracker state rendering and watch mode.
 - `cmd/p2p/download.go`: concurrent download execution.
 - `cmd/p2p/discovery.go`: explicit peer, LAN, tracker, and dynamic peer candidate discovery.
 - `cmd/p2p/status.go`: JSON and pretty status rendering.

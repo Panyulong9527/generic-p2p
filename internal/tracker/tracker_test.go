@@ -102,3 +102,42 @@ func TestTrackerPersistsAndReloadsState(t *testing.T) {
 		t.Fatal("expected persisted swarm membership")
 	}
 }
+
+func TestTrackerStatusIncludesSwarmDetails(t *testing.T) {
+	server := NewServer()
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	client := NewClient(httpServer.URL)
+	ctx := context.Background()
+
+	if err := client.RegisterPeer(ctx, "peer-a", []string{"127.0.0.1:9001"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.JoinSwarm(ctx, "peer-a", "sha256-demo", []core.HaveRange{{Start: 0, End: 3}}); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := client.GetStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PeerCount != 1 {
+		t.Fatalf("unexpected peer count: %d", status.PeerCount)
+	}
+	if status.SwarmCount != 1 {
+		t.Fatalf("unexpected swarm count: %d", status.SwarmCount)
+	}
+	if len(status.Swarms) != 1 {
+		t.Fatalf("unexpected swarm status count: %d", len(status.Swarms))
+	}
+	if status.Swarms[0].ContentID != "sha256-demo" {
+		t.Fatalf("unexpected swarm content id: %s", status.Swarms[0].ContentID)
+	}
+	if status.Swarms[0].PeerCount != 1 {
+		t.Fatalf("unexpected swarm peer count: %d", status.Swarms[0].PeerCount)
+	}
+	if len(status.Swarms[0].Peers) != 1 || status.Swarms[0].Peers[0].PeerID != "peer-a" {
+		t.Fatalf("unexpected swarm peers: %#v", status.Swarms[0].Peers)
+	}
+}
