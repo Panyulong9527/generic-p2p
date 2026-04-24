@@ -4,6 +4,7 @@
 .p2p*/
 .p2p-store*/
 .web-demo*/
+.p2p-web-users.json
 *.out.log
 *.err.log
 *.exe

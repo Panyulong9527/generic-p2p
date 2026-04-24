@@ -8,6 +8,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -278,5 +280,83 @@ func TestTrackerWebShareUploadListAndDownload(t *testing.T) {
 	defer deletedDownloadResp.Body.Close()
 	if deletedDownloadResp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected deleted download to be missing, got %s", deletedDownloadResp.Status)
+	}
+}
+
+func TestTrackerWebAuthProtectsWebRoutes(t *testing.T) {
+	dir := t.TempDir()
+	usersPath := dir + "\\users.json"
+	if err := os.WriteFile(usersPath, []byte(`{"users":[{"username":"admin","password":"secret"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	server := NewServer().
+		WithWebDataDir(dir + "\\web").
+		WithWebUsersPath(usersPath)
+	if err := server.loadWebUsers(); err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	noRedirectClient := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	pageReq, err := http.NewRequest(http.MethodGet, httpServer.URL+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageReq.Header.Set("Accept", "text/html")
+	pageResp, err := noRedirectClient.Do(pageReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pageResp.Body.Close()
+	if pageResp.StatusCode != http.StatusFound {
+		t.Fatalf("expected unauthenticated page redirect, got %s", pageResp.Status)
+	}
+
+	apiResp, err := noRedirectClient.Get(httpServer.URL + "/v1/web/shares")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer apiResp.Body.Close()
+	if apiResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected unauthenticated API rejection, got %s", apiResp.Status)
+	}
+
+	loginResp, err := noRedirectClient.Post(
+		httpServer.URL+"/login",
+		"application/x-www-form-urlencoded",
+		strings.NewReader("username=admin&password=secret"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loginResp.Body.Close()
+	if loginResp.StatusCode != http.StatusFound {
+		t.Fatalf("unexpected login status: %s", loginResp.Status)
+	}
+	if len(loginResp.Cookies()) == 0 {
+		t.Fatal("expected login cookie")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, httpServer.URL+"/v1/web/shares", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cookie := range loginResp.Cookies() {
+		req.AddCookie(cookie)
+	}
+	authResp, err := noRedirectClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authResp.Body.Close()
+	if authResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected authenticated API success, got %s", authResp.Status)
 	}
 }

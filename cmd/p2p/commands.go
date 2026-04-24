@@ -311,6 +311,7 @@ func runTracker(logger *logging.Logger, args []string) error {
 	listen := fs.String("listen", "127.0.0.1:7000", "tracker listen address")
 	stateFile := fs.String("state-file", ".p2p-tracker-state.json", "tracker state file path")
 	webDataDir := fs.String("web-data-dir", ".p2p-web", "directory for demo web uploads and share index")
+	webUsersFile := fs.String("web-users-file", "", "optional JSON file with demo web usernames and passwords")
 	peerTTL := fs.Duration("peer-ttl", 10*time.Second, "how long a peer remains active without refresh")
 	cleanupInterval := fs.Duration("cleanup-interval", 2*time.Second, "how often expired peers are pruned; use 0 to disable background cleanup")
 
@@ -327,6 +328,7 @@ func runTracker(logger *logging.Logger, args []string) error {
 	server := tracker.NewServer().
 		WithStatePath(*stateFile).
 		WithWebDataDir(*webDataDir).
+		WithWebUsersPath(*webUsersFile).
 		WithPeerTTL(*peerTTL).
 		WithCleanupInterval(*cleanupInterval)
 	logger.Info(
@@ -334,6 +336,7 @@ func runTracker(logger *logging.Logger, args []string) error {
 		"listen", *listen,
 		"stateFile", *stateFile,
 		"webDataDir", *webDataDir,
+		"webUsersFile", *webUsersFile,
 		"peerTTL", peerTTL.String(),
 		"cleanupInterval", cleanupInterval.String(),
 	)

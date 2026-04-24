@@ -46,11 +46,17 @@ func (s *Server) handleWebApp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.requireWebAuth(w, r) {
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = io.WriteString(w, webAppHTML)
 }
 
 func (s *Server) handleWebShares(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWebAuth(w, r) {
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		s.handleListWebShares(w, r)
@@ -62,6 +68,9 @@ func (s *Server) handleWebShares(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleWebShareFile(w http.ResponseWriter, r *http.Request) {
+	if !s.requireWebAuth(w, r) {
+		return
+	}
 	path := strings.TrimPrefix(r.URL.Path, "/v1/web/shares/")
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 
@@ -487,6 +496,12 @@ const webAppHTML = `<!doctype html>
     .section-title h2 {
       margin: 0;
     }
+    .header-actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+    }
     .share {
       display: grid;
       grid-template-columns: 1fr auto;
@@ -573,7 +588,12 @@ const webAppHTML = `<!doctype html>
 <body>
   <main>
     <header>
-      <h1>LAN Share <span class="badge">demo</span></h1>
+      <div class="header-actions">
+        <h1>LAN Share <span class="badge">demo</span></h1>
+        <form method="post" action="/logout">
+          <button class="secondary" type="submit">Logout</button>
+        </form>
+      </div>
       <p class="subhead">Open this tracker address from devices on the same LAN. Upload a file here, and other devices can immediately see and download it. This is a test demo; uploaded files are stored on the tracker machine.</p>
     </header>
     <div class="grid">

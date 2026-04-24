@@ -58,7 +58,21 @@ Start the thin tracker:
 p2p tracker --listen 127.0.0.1:7000
 p2p tracker --listen 127.0.0.1:7000 --state-file .\.p2p-tracker-state.json
 p2p tracker --listen 0.0.0.0:7000 --web-data-dir .\.p2p-web
+p2p tracker --listen 0.0.0.0:7000 --web-users-file .\.p2p-web-users.json
 p2p tracker --listen 127.0.0.1:7000 --peer-ttl 30s --cleanup-interval 5s
+```
+
+Optional demo web login file:
+
+```json
+{
+  "users": [
+    {
+      "username": "admin",
+      "password": "change-me"
+    }
+  ]
+}
 ```
 
 Open the demo LAN sharing page:

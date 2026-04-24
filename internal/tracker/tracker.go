@@ -61,6 +61,9 @@ type Server struct {
 	cleanupInterval time.Duration
 	statePath       string
 	webDataDir      string
+	webUsersPath    string
+	webUsers        map[string]string
+	webSessions     map[string]string
 }
 
 func NewServer() *Server {
@@ -70,6 +73,7 @@ func NewServer() *Server {
 		peerTTL:         10 * time.Second,
 		cleanupInterval: 2 * time.Second,
 		webDataDir:      defaultWebDataDir,
+		webSessions:     make(map[string]string),
 	}
 }
 
@@ -96,12 +100,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/status", s.handleStatus)
 	mux.HandleFunc("/v1/web/shares/", s.handleWebShareFile)
 	mux.HandleFunc("/v1/web/shares", s.handleWebShares)
+	mux.HandleFunc("/login", s.handleWebLogin)
+	mux.HandleFunc("/logout", s.handleWebLogout)
 	mux.HandleFunc("/", s.handleWebApp)
 	return mux
 }
 
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	if err := s.loadState(); err != nil {
+		return err
+	}
+	if err := s.loadWebUsers(); err != nil {
 		return err
 	}
 
@@ -256,6 +265,9 @@ func (s *Server) cleanupLoop(ctx context.Context) {
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.webAuthEnabled() && strings.HasPrefix(r.Header.Get("Referer"), "http") && !s.requireWebAuth(w, r) {
 		return
 	}
 
