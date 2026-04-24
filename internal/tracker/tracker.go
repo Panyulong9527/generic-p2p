@@ -76,6 +76,16 @@ func (s *Server) WithStatePath(statePath string) *Server {
 	return s
 }
 
+func (s *Server) WithPeerTTL(peerTTL time.Duration) *Server {
+	s.peerTTL = peerTTL
+	return s
+}
+
+func (s *Server) WithCleanupInterval(cleanupInterval time.Duration) *Server {
+	s.cleanupInterval = cleanupInterval
+	return s
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/peers/register", s.handleRegister)

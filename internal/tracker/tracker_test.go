@@ -141,3 +141,17 @@ func TestTrackerStatusIncludesSwarmDetails(t *testing.T) {
 		t.Fatalf("unexpected swarm peers: %#v", status.Swarms[0].Peers)
 	}
 }
+
+func TestTrackerStatusReflectsConfiguredTimings(t *testing.T) {
+	server := NewServer().
+		WithPeerTTL(45 * time.Second).
+		WithCleanupInterval(15 * time.Second)
+
+	status := server.Status()
+	if status.PeerTTLSeconds != 45 {
+		t.Fatalf("unexpected peer TTL seconds: %d", status.PeerTTLSeconds)
+	}
+	if status.CleanupIntervalSeconds != 15 {
+		t.Fatalf("unexpected cleanup interval seconds: %d", status.CleanupIntervalSeconds)
+	}
+}

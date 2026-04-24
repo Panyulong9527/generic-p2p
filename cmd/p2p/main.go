@@ -56,7 +56,7 @@ func main() {
 func printUsage() {
 	fmt.Println(`p2p commands:
   p2p share --path ./file.bin [--piece-size 1048576] [--data-dir .p2p]
- p2p tracker --listen 127.0.0.1:7000
+  p2p tracker --listen 127.0.0.1:7000 [--state-file .p2p-tracker-state.json] [--peer-ttl 10s] [--cleanup-interval 2s]
   p2p tracker-status --tracker http://127.0.0.1:7000 [--pretty] [--watch] [--interval 1s]
   p2p serve --path ./file.bin [--listen 127.0.0.1:9001] [--data-dir .p2p] [--lan] [--tracker http://127.0.0.1:7000]
   p2p get --manifest .p2p/<contentId>/manifest.json --store-dir .p2p-store --out ./out.bin [--peer 127.0.0.1:9001] [--peers 127.0.0.1:9001,127.0.0.1:9002]

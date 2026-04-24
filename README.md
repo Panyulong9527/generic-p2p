@@ -57,6 +57,7 @@ Start the thin tracker:
 ```powershell
 p2p tracker --listen 127.0.0.1:7000
 p2p tracker --listen 127.0.0.1:7000 --state-file .\.p2p-tracker-state.json
+p2p tracker --listen 127.0.0.1:7000 --peer-ttl 30s --cleanup-interval 5s
 ```
 
 Inspect tracker state:
