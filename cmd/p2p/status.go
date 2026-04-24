@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"time"
@@ -19,6 +20,7 @@ func runStatus(args []string) error {
 	watch := fs.Bool("watch", false, "continuously print status snapshots")
 	interval := fs.Duration("interval", time.Second, "refresh interval when --watch is enabled")
 	pretty := fs.Bool("pretty", false, "print a human-readable status view instead of JSON")
+	noClear := fs.Bool("no-clear", false, "do not clear the terminal between watch refreshes")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -35,7 +37,7 @@ func runStatus(args []string) error {
 		if *interval <= 0 {
 			return errors.New("status interval must be greater than zero")
 		}
-		return watchStatus(manifest, *storeDir, *interval, true)
+		return watchStatus(manifest, *storeDir, *interval, true, !*noClear)
 	}
 
 	return printStatusOnce(manifest, *storeDir, *pretty)
@@ -61,8 +63,12 @@ func printStatusOnce(manifest *core.ContentManifest, storeDir string, pretty boo
 	return nil
 }
 
-func watchStatus(manifest *core.ContentManifest, storeDir string, interval time.Duration, pretty bool) error {
+func watchStatus(manifest *core.ContentManifest, storeDir string, interval time.Duration, pretty bool, clearScreen bool) error {
 	for {
+		if clearScreen {
+			resetTerminalView()
+		}
+		fmt.Printf("updated=%s interval=%s\n\n", time.Now().Format(time.RFC3339), interval)
 		if err := printStatusOnce(manifest, storeDir, pretty); err != nil {
 			return err
 		}
@@ -191,4 +197,8 @@ func formatDuration(value time.Duration) string {
 		return value.Truncate(time.Second).String()
 	}
 	return value.Truncate(time.Minute).String()
+}
+
+func resetTerminalView() {
+	_, _ = os.Stdout.WriteString("\x1b[H\x1b[2J")
 }

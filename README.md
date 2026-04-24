@@ -70,6 +70,7 @@ Watch status:
 ```powershell
 p2p status --manifest .\.p2p\<contentId>\manifest.json --store-dir .\.p2p-store --pretty
 p2p status --manifest .\.p2p\<contentId>\manifest.json --store-dir .\.p2p-store --watch --interval 1s
+p2p status --manifest .\.p2p\<contentId>\manifest.json --store-dir .\.p2p-store --watch --interval 1s --no-clear
 ```
 
 Example pretty status:
