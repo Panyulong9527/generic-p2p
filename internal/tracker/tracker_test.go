@@ -1,7 +1,12 @@
 package tracker
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
+	"mime/multipart"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -153,5 +158,88 @@ func TestTrackerStatusReflectsConfiguredTimings(t *testing.T) {
 	}
 	if status.CleanupIntervalSeconds != 15 {
 		t.Fatalf("unexpected cleanup interval seconds: %d", status.CleanupIntervalSeconds)
+	}
+}
+
+func TestTrackerWebShareUploadListAndDownload(t *testing.T) {
+	server := NewServer().WithWebDataDir(t.TempDir())
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	pageResp, err := http.Get(httpServer.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pageResp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected page status: %s", pageResp.Status)
+	}
+	_ = pageResp.Body.Close()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "hello.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(part, "hello lan share"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	uploadReq, err := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/web/shares", &body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadReq.Header.Set("Content-Type", writer.FormDataContentType())
+
+	uploadResp, err := http.DefaultClient.Do(uploadReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer uploadResp.Body.Close()
+	if uploadResp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected upload status: %s", uploadResp.Status)
+	}
+
+	var share WebShare
+	if err := json.NewDecoder(uploadResp.Body).Decode(&share); err != nil {
+		t.Fatal(err)
+	}
+	if share.Name != "hello.txt" {
+		t.Fatalf("unexpected share name: %s", share.Name)
+	}
+
+	listResp, err := http.Get(httpServer.URL + "/v1/web/shares")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listResp.Body.Close()
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected list status: %s", listResp.Status)
+	}
+
+	var listBody struct {
+		Shares []WebShare `json:"shares"`
+	}
+	if err := json.NewDecoder(listResp.Body).Decode(&listBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(listBody.Shares) != 1 || listBody.Shares[0].ContentID != share.ContentID {
+		t.Fatalf("unexpected shares: %#v", listBody.Shares)
+	}
+
+	downloadResp, err := http.Get(httpServer.URL + share.DownloadPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer downloadResp.Body.Close()
+	downloaded, err := io.ReadAll(downloadResp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(downloaded) != "hello lan share" {
+		t.Fatalf("unexpected downloaded content: %q", string(downloaded))
 	}
 }

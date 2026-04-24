@@ -3,6 +3,7 @@
 .integration-tracker-run-*/
 .p2p*/
 .p2p-store*/
+.web-demo/
 *.out.log
 *.err.log
 *.exe

@@ -60,6 +60,7 @@ type Server struct {
 	peerTTL         time.Duration
 	cleanupInterval time.Duration
 	statePath       string
+	webDataDir      string
 }
 
 func NewServer() *Server {
@@ -68,6 +69,7 @@ func NewServer() *Server {
 		swarms:          make(map[string]map[string]bool),
 		peerTTL:         10 * time.Second,
 		cleanupInterval: 2 * time.Second,
+		webDataDir:      defaultWebDataDir,
 	}
 }
 
@@ -92,6 +94,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/swarms/join", s.handleJoin)
 	mux.HandleFunc("/v1/swarms/", s.handleGetPeers)
 	mux.HandleFunc("/v1/status", s.handleStatus)
+	mux.HandleFunc("/v1/web/shares/", s.handleWebShareFile)
+	mux.HandleFunc("/v1/web/shares", s.handleWebShares)
+	mux.HandleFunc("/", s.handleWebApp)
 	return mux
 }
 

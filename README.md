@@ -13,7 +13,7 @@ The current codebase is no longer just a LAN-only smoke prototype. It contains a
 - `get --seed-after-download` keeps a completed downloader alive as a peer.
 - `HAVE` ranges let peers advertise completed piece ranges.
 - LAN discovery works through UDP announcements.
-- `tracker` starts a thin tracker for peer discovery and can persist swarm state to a local JSON file.
+- `tracker` starts a thin tracker for peer discovery, can persist swarm state to a local JSON file, and serves a demo LAN sharing webpage.
 - `tracker-status` inspects live tracker state, including active swarms and peer ranges.
 - `serve --tracker` and `get --tracker` register and join swarms through the tracker.
 - Downloads support concurrent workers, dynamic peer refresh, rarest-first piece selection, peer cooldown, peer load tracking, and peer usage balancing.
@@ -57,8 +57,17 @@ Start the thin tracker:
 ```powershell
 p2p tracker --listen 127.0.0.1:7000
 p2p tracker --listen 127.0.0.1:7000 --state-file .\.p2p-tracker-state.json
+p2p tracker --listen 0.0.0.0:7000 --web-data-dir .\.p2p-web
 p2p tracker --listen 127.0.0.1:7000 --peer-ttl 30s --cleanup-interval 5s
 ```
+
+Open the demo LAN sharing page:
+
+```text
+http://127.0.0.1:7000/
+```
+
+For another device on the same LAN, replace `127.0.0.1` with the tracker machine's LAN IP address.
 
 Inspect tracker state:
 
