@@ -88,6 +88,50 @@ func TestTrackerStoresUDPAddrs(t *testing.T) {
 	}
 }
 
+func TestTrackerCoordinatesUDPProbeRequests(t *testing.T) {
+	server := NewServer()
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	client := NewClient(httpServer.URL)
+	ctx := context.Background()
+
+	if err := client.RegisterPeerWithUDP(ctx, "peer-a", []string{"127.0.0.1:9001"}, []string{"127.0.0.1:9003"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RegisterPeerWithUDP(ctx, "peer-b", []string{"127.0.0.1:9002"}, []string{"127.0.0.1:9004"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RequestUDPProbe(ctx, "sha256-demo", "peer-b", "127.0.0.1:9004", "peer-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	requests, err := client.PollUDPProbeRequests(ctx, "peer-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("unexpected request count: %d", len(requests))
+	}
+	if requests[0].RequesterPeerID != "peer-b" {
+		t.Fatalf("unexpected requester peer id: %s", requests[0].RequesterPeerID)
+	}
+	if requests[0].ObservedUDPAddr == "" {
+		t.Fatal("expected observed udp addr")
+	}
+	if !strings.HasSuffix(requests[0].ObservedUDPAddr, ":9004") {
+		t.Fatalf("expected observed udp addr to keep requester port, got %s", requests[0].ObservedUDPAddr)
+	}
+
+	requests, err = client.PollUDPProbeRequests(ctx, "peer-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 0 {
+		t.Fatalf("expected probe requests to be consumed, got %#v", requests)
+	}
+}
+
 func TestTrackerPrunesExpiredPeers(t *testing.T) {
 	server := NewServer()
 	server.peerTTL = 20 * time.Millisecond

@@ -46,7 +46,7 @@ func discoverTrackerPeers(logger *logging.Logger, contentID string, trackerURL s
 	return addrs, nil
 }
 
-func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerURL string, selfUDPListenAddr string) ([]string, error) {
+func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerURL string, selfPeerID string, selfUDPListenAddr string) ([]string, error) {
 	client := tracker.NewClient(trackerURL)
 	peers, err := client.GetPeers(context.Background(), contentID)
 	if err != nil {
@@ -55,6 +55,15 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 
 	addrs := make([]string, 0, len(peers))
 	for _, peer := range peers {
+		if selfPeerID != "" && selfUDPListenAddr != "" && peer.PeerID != "" && peer.PeerID != selfPeerID {
+			if err := client.RequestUDPProbe(context.Background(), contentID, selfPeerID, selfUDPListenAddr, peer.PeerID); err != nil {
+				logger.Error("tracker_udp_probe_request_failed",
+					"contentId", contentID,
+					"peerId", peer.PeerID,
+					"error", err.Error(),
+				)
+			}
+		}
 		for _, addr := range peer.UDPAddrs {
 			if addr == "" || addr == selfUDPListenAddr {
 				continue
@@ -142,7 +151,7 @@ func collectDynamicPeerCandidates(logger *logging.Logger, options peerDiscoveryO
 	}
 	udpPeerAddrs := collectPeerAddrs(options.explicitUDPPeer, options.explicitUDPPeers)
 	if options.trackerURL != "" {
-		discoveredUDPAddrs, err := discoverTrackerUDPPeers(logger, options.contentID, options.trackerURL, options.selfUDPListenAddr)
+		discoveredUDPAddrs, err := discoverTrackerUDPPeers(logger, options.contentID, options.trackerURL, options.selfListenAddr, options.selfUDPListenAddr)
 		if err != nil {
 			return nil, err
 		}

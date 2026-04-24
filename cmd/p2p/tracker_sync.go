@@ -7,6 +7,7 @@ import (
 
 	"generic-p2p/internal/core"
 	"generic-p2p/internal/logging"
+	p2pnet "generic-p2p/internal/net"
 	"generic-p2p/internal/tracker"
 )
 
@@ -44,6 +45,43 @@ func syncTrackerPeer(logger *logging.Logger, trackerURL string, peerID string, u
 	}
 	if err := client.JoinSwarm(context.Background(), peerID, contentID, haveRanges); err != nil {
 		return fmt.Errorf("join swarm: %w", err)
+	}
+	if udpAddr != "" {
+		if err := pollTrackerUDPProbeRequests(logger, client, peerID); err != nil {
+			return fmt.Errorf("poll udp probes: %w", err)
+		}
+	}
+	return nil
+}
+
+func pollTrackerUDPProbeRequests(logger *logging.Logger, client *tracker.Client, peerID string) error {
+	requests, err := client.PollUDPProbeRequests(context.Background(), peerID)
+	if err != nil {
+		return err
+	}
+
+	for _, request := range requests {
+		targetAddr := request.ObservedUDPAddr
+		if targetAddr == "" {
+			targetAddr = request.RequesterUDPAddr
+		}
+		if targetAddr == "" {
+			continue
+		}
+		if err := p2pnet.NewUDPClient(targetAddr, 2*time.Second).Probe(); err != nil {
+			logger.Error("tracker_udp_probe_response_failed",
+				"contentId", request.ContentID,
+				"requesterPeerId", request.RequesterPeerID,
+				"target", targetAddr,
+				"error", err.Error(),
+			)
+			continue
+		}
+		logger.Info("tracker_udp_probe_response_sent",
+			"contentId", request.ContentID,
+			"requesterPeerId", request.RequesterPeerID,
+			"target", targetAddr,
+		)
 	}
 	return nil
 }

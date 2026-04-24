@@ -42,6 +42,29 @@ type GetPeersResponse struct {
 	Peers     []PeerRecord `json:"peers"`
 }
 
+type RequestUDPProbeRequest struct {
+	ContentID        string `json:"contentId"`
+	RequesterPeerID  string `json:"requesterPeerId"`
+	RequesterUDPAddr string `json:"requesterUdpAddr"`
+	TargetPeerID     string `json:"targetPeerId"`
+}
+
+type UDPProbeTask struct {
+	ContentID        string `json:"contentId"`
+	RequesterPeerID  string `json:"requesterPeerId"`
+	RequesterUDPAddr string `json:"requesterUdpAddr"`
+	ObservedUDPAddr  string `json:"observedUdpAddr,omitempty"`
+	RequestedAt      int64  `json:"requestedAt"`
+}
+
+type PollUDPProbeRequestsRequest struct {
+	PeerID string `json:"peerId"`
+}
+
+type PollUDPProbeRequestsResponse struct {
+	Requests []UDPProbeTask `json:"requests"`
+}
+
 type SwarmStatus struct {
 	ContentID string       `json:"contentId"`
 	PeerCount int          `json:"peerCount"`
@@ -62,6 +85,7 @@ type Server struct {
 	mu              sync.Mutex
 	peers           map[string]PeerRecord
 	swarms          map[string]map[string]bool
+	udpProbes       map[string][]UDPProbeTask
 	peerTTL         time.Duration
 	cleanupInterval time.Duration
 	statePath       string
@@ -75,6 +99,7 @@ func NewServer() *Server {
 	return &Server{
 		peers:           make(map[string]PeerRecord),
 		swarms:          make(map[string]map[string]bool),
+		udpProbes:       make(map[string][]UDPProbeTask),
 		peerTTL:         10 * time.Second,
 		cleanupInterval: 2 * time.Second,
 		webDataDir:      defaultWebDataDir,
@@ -100,6 +125,8 @@ func (s *Server) WithCleanupInterval(cleanupInterval time.Duration) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/peers/register", s.handleRegister)
+	mux.HandleFunc("/v1/udp/probes/request", s.handleRequestUDPProbe)
+	mux.HandleFunc("/v1/udp/probes/poll", s.handlePollUDPProbeRequests)
 	mux.HandleFunc("/v1/swarms/join", s.handleJoin)
 	mux.HandleFunc("/v1/swarms/", s.handleGetPeers)
 	mux.HandleFunc("/v1/status", s.handleStatus)
@@ -253,6 +280,71 @@ func (s *Server) handleGetPeers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, response)
 }
 
+func (s *Server) handleRequestUDPProbe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req RequestUDPProbeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.ContentID) == "" ||
+		strings.TrimSpace(req.RequesterPeerID) == "" ||
+		strings.TrimSpace(req.RequesterUDPAddr) == "" ||
+		strings.TrimSpace(req.TargetPeerID) == "" {
+		http.Error(w, "contentId, requesterPeerId, requesterUdpAddr, and targetPeerId are required", http.StatusBadRequest)
+		return
+	}
+	if req.RequesterPeerID == req.TargetPeerID {
+		http.Error(w, "targetPeerId must differ from requesterPeerId", http.StatusBadRequest)
+		return
+	}
+
+	now := time.Now()
+	task := UDPProbeTask{
+		ContentID:        req.ContentID,
+		RequesterPeerID:  req.RequesterPeerID,
+		RequesterUDPAddr: req.RequesterUDPAddr,
+		ObservedUDPAddr:  observedAddr(r, req.RequesterUDPAddr),
+		RequestedAt:      now.Unix(),
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneExpiredLocked(now)
+	s.udpProbes[req.TargetPeerID] = appendUDPProbeTask(s.udpProbes[req.TargetPeerID], task)
+
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handlePollUDPProbeRequests(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req PollUDPProbeRequestsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.PeerID) == "" {
+		http.Error(w, "peerId is required", http.StatusBadRequest)
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneExpiredLocked(time.Now())
+
+	requests := append([]UDPProbeTask(nil), s.udpProbes[req.PeerID]...)
+	delete(s.udpProbes, req.PeerID)
+	writeJSON(w, PollUDPProbeRequestsResponse{Requests: requests})
+}
+
 func (s *Server) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(s.cleanupInterval)
 	defer ticker.Stop()
@@ -333,12 +425,27 @@ func (s *Server) pruneExpiredLocked(now time.Time) {
 
 	for _, peerID := range expiredPeerIDs {
 		delete(s.peers, peerID)
+		delete(s.udpProbes, peerID)
 		for contentID, peerSet := range s.swarms {
 			delete(peerSet, peerID)
 			if len(peerSet) == 0 {
 				delete(s.swarms, contentID)
 			}
 		}
+	}
+
+	for peerID, probes := range s.udpProbes {
+		kept := probes[:0]
+		for _, probe := range probes {
+			if now.Sub(time.Unix(probe.RequestedAt, 0)) <= s.peerTTL {
+				kept = append(kept, probe)
+			}
+		}
+		if len(kept) == 0 {
+			delete(s.udpProbes, peerID)
+			continue
+		}
+		s.udpProbes[peerID] = kept
 	}
 }
 
@@ -365,6 +472,18 @@ func observedAddr(r *http.Request, declaredAddr string) string {
 		return ""
 	}
 	return net.JoinHostPort(remoteHost, declaredPort)
+}
+
+func appendUDPProbeTask(tasks []UDPProbeTask, task UDPProbeTask) []UDPProbeTask {
+	for i, existing := range tasks {
+		if existing.ContentID == task.ContentID &&
+			existing.RequesterPeerID == task.RequesterPeerID &&
+			existing.RequesterUDPAddr == task.RequesterUDPAddr {
+			tasks[i] = task
+			return tasks
+		}
+	}
+	return append(tasks, task)
 }
 
 type persistedState struct {
@@ -500,6 +619,25 @@ func (c *Client) GetPeers(ctx context.Context, contentID string) ([]PeerRecord, 
 		return nil, err
 	}
 	return body.Peers, nil
+}
+
+func (c *Client) RequestUDPProbe(ctx context.Context, contentID string, requesterPeerID string, requesterUDPAddr string, targetPeerID string) error {
+	reqBody := RequestUDPProbeRequest{
+		ContentID:        contentID,
+		RequesterPeerID:  requesterPeerID,
+		RequesterUDPAddr: requesterUDPAddr,
+		TargetPeerID:     targetPeerID,
+	}
+	return c.postJSON(ctx, "/v1/udp/probes/request", reqBody, nil)
+}
+
+func (c *Client) PollUDPProbeRequests(ctx context.Context, peerID string) ([]UDPProbeTask, error) {
+	reqBody := PollUDPProbeRequestsRequest{PeerID: peerID}
+	var response PollUDPProbeRequestsResponse
+	if err := c.postJSON(ctx, "/v1/udp/probes/poll", reqBody, &response); err != nil {
+		return nil, err
+	}
+	return response.Requests, nil
 }
 
 func (c *Client) GetStatus(ctx context.Context) (StatusResponse, error) {
