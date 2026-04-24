@@ -38,6 +38,9 @@ func TestUDPClientFetchHaveAndPiece(t *testing.T) {
 	waitForUDPServer(t, addr, manifest.ContentID)
 
 	client := NewUDPClient(addr, time.Second)
+	if err := client.Probe(); err != nil {
+		t.Fatal(err)
+	}
 	haveRanges, err := client.FetchHave(manifest.ContentID)
 	if err != nil {
 		t.Fatal(err)
@@ -62,6 +65,14 @@ func TestUDPClientFetchHaveAndPiece(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("udp server did not stop")
+	}
+}
+
+func TestUDPClientProbeFailsWhenPeerUnavailable(t *testing.T) {
+	addr := freeUDPAddr(t)
+	client := NewUDPClient(addr, 50*time.Millisecond)
+	if err := client.Probe(); err == nil {
+		t.Fatal("expected probe to fail without a UDP server")
 	}
 }
 

@@ -194,6 +194,20 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 	for _, addr := range udpPeerAddrs {
 		peerID := "udp://" + addr
 		client := p2pnet.NewUDPClient(addr, 10*time.Second)
+		if err := client.Probe(); err != nil {
+			var cooldown time.Duration
+			if peerHealth != nil {
+				cooldown = peerHealth.MarkFailure(peerID, time.Now())
+			}
+			logger.Error("udp_peer_probe_failed",
+				"contentId", contentID,
+				"peer", peerID,
+				"cooldownMs", cooldown.Milliseconds(),
+				"error", err.Error(),
+			)
+			continue
+		}
+		logger.Info("udp_peer_probe_ok", "contentId", contentID, "peer", peerID)
 		haveRanges, err := client.FetchHave(contentID)
 		if err != nil {
 			var cooldown time.Duration

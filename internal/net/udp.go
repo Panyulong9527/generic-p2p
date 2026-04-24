@@ -15,6 +15,8 @@ import (
 )
 
 const (
+	UDPMessageTypePing         = "UDP_PING"
+	UDPMessageTypePong         = "UDP_PONG"
 	UDPMessageTypeHaveRequest  = "UDP_HAVE_REQUEST"
 	UDPMessageTypeHaveResponse = "UDP_HAVE_RESPONSE"
 	UDPMessageTypePieceRequest = "UDP_PIECE_REQUEST"
@@ -28,6 +30,14 @@ const (
 type UDPMessage struct {
 	Type string          `json:"type"`
 	Body json.RawMessage `json:"body,omitempty"`
+}
+
+type UDPPing struct {
+	RequestID string `json:"requestId"`
+}
+
+type UDPPong struct {
+	RequestID string `json:"requestId"`
 }
 
 type UDPHaveRequest struct {
@@ -113,6 +123,13 @@ func (s *UDPServer) handleDatagram(conn *net.UDPConn, remote *net.UDPAddr, paylo
 	}
 
 	switch message.Type {
+	case UDPMessageTypePing:
+		req, err := decodeUDPBody[UDPPing](message)
+		if err != nil {
+			_ = writeUDPError(conn, remote, "", err)
+			return
+		}
+		_ = writeUDPMessage(conn, remote, UDPMessageTypePong, UDPPong{RequestID: req.RequestID})
 	case UDPMessageTypeHaveRequest:
 		req, err := decodeUDPBody[UDPHaveRequest](message)
 		if err != nil {
@@ -173,6 +190,58 @@ func NewUDPClient(addr string, timeout time.Duration) *UDPClient {
 	return &UDPClient{
 		Addr:    addr,
 		Timeout: timeout,
+	}
+}
+
+func (c *UDPClient) Probe() error {
+	requestID, err := newUDPRequestID()
+	if err != nil {
+		return err
+	}
+	conn, remote, err := c.open()
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	if err := writeUDPMessage(conn, remote, UDPMessageTypePing, UDPPing{RequestID: requestID}); err != nil {
+		return err
+	}
+
+	deadline := time.Now().Add(c.Timeout)
+	buffer := make([]byte, udpMaxDatagramBytes)
+	for {
+		if err := conn.SetReadDeadline(deadline); err != nil {
+			return err
+		}
+		n, _, err := conn.ReadFromUDP(buffer)
+		if err != nil {
+			return err
+		}
+		message, err := decodeUDPMessage(buffer[:n])
+		if err != nil {
+			continue
+		}
+		if message.Type == UDPMessageTypeError {
+			body, err := decodeUDPBody[UDPError](message)
+			if err != nil {
+				return err
+			}
+			if body.RequestID == requestID {
+				return errors.New(body.Message)
+			}
+			continue
+		}
+		if message.Type != UDPMessageTypePong {
+			continue
+		}
+		body, err := decodeUDPBody[UDPPong](message)
+		if err != nil {
+			return err
+		}
+		if body.RequestID == requestID {
+			return nil
+		}
 	}
 }
 
