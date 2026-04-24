@@ -4,6 +4,8 @@
 .p2p*/
 .p2p-store*/
 .web-demo*/
+.udp-smoke/
+.udp-tracker-smoke/
 .p2p-web-users.json
 *.out.log
 *.err.log

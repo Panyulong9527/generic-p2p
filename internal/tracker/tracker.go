@@ -17,13 +17,15 @@ import (
 type PeerRecord struct {
 	PeerID     string           `json:"peerId"`
 	Addrs      []string         `json:"addrs"`
+	UDPAddrs   []string         `json:"udpAddrs,omitempty"`
 	HaveRanges []core.HaveRange `json:"haveRanges"`
 	LastSeenAt int64            `json:"lastSeenAt"`
 }
 
 type RegisterRequest struct {
-	PeerID string   `json:"peerId"`
-	Addrs  []string `json:"addrs"`
+	PeerID   string   `json:"peerId"`
+	Addrs    []string `json:"addrs"`
+	UDPAddrs []string `json:"udpAddrs,omitempty"`
 }
 
 type JoinSwarmRequest struct {
@@ -160,6 +162,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	record := s.peers[req.PeerID]
 	record.PeerID = req.PeerID
 	record.Addrs = req.Addrs
+	record.UDPAddrs = req.UDPAddrs
 	record.LastSeenAt = time.Now().Unix()
 	s.peers[req.PeerID] = record
 	if err := s.saveLocked(); err != nil {
@@ -425,9 +428,14 @@ func NewClient(baseURL string) *Client {
 }
 
 func (c *Client) RegisterPeer(ctx context.Context, peerID string, addrs []string) error {
+	return c.RegisterPeerWithUDP(ctx, peerID, addrs, nil)
+}
+
+func (c *Client) RegisterPeerWithUDP(ctx context.Context, peerID string, addrs []string, udpAddrs []string) error {
 	reqBody := RegisterRequest{
-		PeerID: peerID,
-		Addrs:  addrs,
+		PeerID:   peerID,
+		Addrs:    addrs,
+		UDPAddrs: udpAddrs,
 	}
 	return c.postJSON(ctx, "/v1/peers/register", reqBody, nil)
 }

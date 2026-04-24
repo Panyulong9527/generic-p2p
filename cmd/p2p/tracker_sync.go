@@ -14,15 +14,15 @@ func syncTrackerProgress(logger *logging.Logger, discovery peerDiscoveryOptions,
 	if discovery.trackerURL == "" || discovery.selfListenAddr == "" {
 		return nil
 	}
-	return syncTrackerPeer(logger, discovery.trackerURL, discovery.selfListenAddr, discovery.contentID, store.CompletedRanges())
+	return syncTrackerPeer(logger, discovery.trackerURL, discovery.selfListenAddr, discovery.selfUDPListenAddr, discovery.contentID, store.CompletedRanges())
 }
 
-func startTrackerSyncLoop(logger *logging.Logger, trackerURL string, peerID string, contentID string, interval time.Duration, haveRanges func() []core.HaveRange) {
+func startTrackerSyncLoop(logger *logging.Logger, trackerURL string, peerID string, udpAddr string, contentID string, interval time.Duration, haveRanges func() []core.HaveRange) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	syncOnce := func() {
-		if err := syncTrackerPeer(logger, trackerURL, peerID, contentID, haveRanges()); err != nil {
+		if err := syncTrackerPeer(logger, trackerURL, peerID, udpAddr, contentID, haveRanges()); err != nil {
 			logger.Error("tracker_sync_failed", "tracker", trackerURL, "peer", peerID, "contentId", contentID, "error", err.Error())
 		}
 	}
@@ -33,9 +33,13 @@ func startTrackerSyncLoop(logger *logging.Logger, trackerURL string, peerID stri
 	}
 }
 
-func syncTrackerPeer(logger *logging.Logger, trackerURL string, peerID string, contentID string, haveRanges []core.HaveRange) error {
+func syncTrackerPeer(logger *logging.Logger, trackerURL string, peerID string, udpAddr string, contentID string, haveRanges []core.HaveRange) error {
 	client := tracker.NewClient(trackerURL)
-	if err := client.RegisterPeer(context.Background(), peerID, []string{peerID}); err != nil {
+	udpAddrs := []string(nil)
+	if udpAddr != "" {
+		udpAddrs = []string{udpAddr}
+	}
+	if err := client.RegisterPeerWithUDP(context.Background(), peerID, []string{peerID}, udpAddrs); err != nil {
 		return fmt.Errorf("register peer: %w", err)
 	}
 	if err := client.JoinSwarm(context.Background(), peerID, contentID, haveRanges); err != nil {

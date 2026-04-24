@@ -128,8 +128,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 			_ = runtime.StartDownload(pieceIndex, selected.PeerID, workerID, time.Now())
 		}
 		peerUsage.RecordAssignment(selected.PeerID)
-		client := p2pnet.NewClient(selected.PeerID, 10*time.Second)
-		data, err := client.FetchPiece(manifest.ContentID, pieceIndex)
+		data, err := fetchPieceFromCandidate(selected, manifest.ContentID, pieceIndex)
 		peerLoad.Release(selected.PeerID)
 		if runtime := store.RuntimeStats(); runtime != nil {
 			_ = runtime.FinishDownload(pieceIndex)
@@ -173,6 +172,19 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 	}
 
 	return fmt.Errorf("failed to download piece %d after retries", pieceIndex)
+}
+
+func fetchPieceFromCandidate(candidate scheduler.PeerCandidate, contentID string, pieceIndex int) ([]byte, error) {
+	switch candidate.Transport {
+	case "udp":
+		return p2pnet.NewUDPClient(candidate.Addr, 10*time.Second).FetchPiece(contentID, pieceIndex)
+	default:
+		addr := candidate.Addr
+		if addr == "" {
+			addr = candidate.PeerID
+		}
+		return p2pnet.NewClient(addr, 10*time.Second).FetchPiece(contentID, pieceIndex)
+	}
 }
 
 func reserveNextPiece(manifest *core.ContentManifest, store *core.PieceStore, state *downloadPieceState, peerCandidates []scheduler.PeerCandidate) (int, bool) {

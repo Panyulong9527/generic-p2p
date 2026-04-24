@@ -37,6 +37,31 @@ func discoverTrackerPeers(logger *logging.Logger, contentID string, trackerURL s
 	return addrs, nil
 }
 
+func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerURL string, selfUDPListenAddr string) ([]string, error) {
+	client := tracker.NewClient(trackerURL)
+	peers, err := client.GetPeers(context.Background(), contentID)
+	if err != nil {
+		return nil, fmt.Errorf("discover tracker udp peers: %w", err)
+	}
+
+	addrs := make([]string, 0, len(peers))
+	for _, peer := range peers {
+		for _, addr := range peer.UDPAddrs {
+			if addr == "" || addr == selfUDPListenAddr {
+				continue
+			}
+			logger.Info("tracker_udp_peer_discovered",
+				"contentId", contentID,
+				"peerId", peer.PeerID,
+				"listen", addr,
+				"ranges", peer.HaveRanges,
+			)
+			addrs = append(addrs, addr)
+		}
+	}
+	return addrs, nil
+}
+
 func collectPeerAddrs(peerAddr string, peerList string) []string {
 	unique := make(map[string]bool)
 	ordered := make([]string, 0)
@@ -97,8 +122,16 @@ func collectDynamicPeerCandidates(logger *logging.Logger, options peerDiscoveryO
 		}
 		peerAddrs = appendUnique(peerAddrs, discoveredAddrs...)
 	}
+	udpPeerAddrs := collectPeerAddrs(options.explicitUDPPeer, options.explicitUDPPeers)
+	if options.trackerURL != "" {
+		discoveredUDPAddrs, err := discoverTrackerUDPPeers(logger, options.contentID, options.trackerURL, options.selfUDPListenAddr)
+		if err != nil {
+			return nil, err
+		}
+		udpPeerAddrs = appendUnique(udpPeerAddrs, discoveredUDPAddrs...)
+	}
 
-	freshCandidates, err := collectPeerCandidates(logger, options.contentID, peerAddrs, peerHealth)
+	freshCandidates, err := collectPeerCandidates(logger, options.contentID, peerAddrs, udpPeerAddrs, peerHealth)
 	if err != nil {
 		return nil, err
 	}
@@ -109,8 +142,8 @@ func collectDynamicPeerCandidates(logger *logging.Logger, options peerDiscoveryO
 	return filterPeerCandidates(logger, options.contentID, candidates, peerHealth, excluded, now, peerLoad, peerUsage)
 }
 
-func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs []string, peerHealth *peerHealthState) ([]scheduler.PeerCandidate, error) {
-	candidates := make([]scheduler.PeerCandidate, 0, len(peerAddrs))
+func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs []string, udpPeerAddrs []string, peerHealth *peerHealthState) ([]scheduler.PeerCandidate, error) {
+	candidates := make([]scheduler.PeerCandidate, 0, len(peerAddrs)+len(udpPeerAddrs))
 	for _, addr := range peerAddrs {
 		client := p2pnet.NewClient(addr, 10*time.Second)
 		haveRanges, err := client.FetchHave(contentID)
@@ -133,8 +166,40 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 		logger.Info("peer_have_received", "contentId", contentID, "peer", addr, "ranges", haveRanges)
 		candidates = append(candidates, scheduler.PeerCandidate{
 			PeerID:     addr,
+			Addr:       addr,
+			Transport:  "tcp",
 			IsLAN:      isLANAddr(addr),
 			Score:      1,
+			HaveRanges: haveRanges,
+		})
+	}
+	for _, addr := range udpPeerAddrs {
+		peerID := "udp://" + addr
+		client := p2pnet.NewUDPClient(addr, 10*time.Second)
+		haveRanges, err := client.FetchHave(contentID)
+		if err != nil {
+			var cooldown time.Duration
+			if peerHealth != nil {
+				cooldown = peerHealth.MarkFailure(peerID, time.Now())
+			}
+			logger.Error("udp_peer_have_failed",
+				"contentId", contentID,
+				"peer", peerID,
+				"cooldownMs", cooldown.Milliseconds(),
+				"error", err.Error(),
+			)
+			continue
+		}
+		if peerHealth != nil {
+			peerHealth.MarkSuccess(peerID)
+		}
+		logger.Info("udp_peer_have_received", "contentId", contentID, "peer", peerID, "ranges", haveRanges)
+		candidates = append(candidates, scheduler.PeerCandidate{
+			PeerID:     peerID,
+			Addr:       addr,
+			Transport:  "udp",
+			IsLAN:      isLANAddr(addr),
+			Score:      1.2,
 			HaveRanges: haveRanges,
 		})
 	}
@@ -200,6 +265,8 @@ func discoverLANPeers(logger *logging.Logger, contentID string, lanAddr string, 
 }
 
 func isLANAddr(addr string) bool {
+	addr = strings.TrimPrefix(addr, "udp://")
+	addr = strings.TrimPrefix(addr, "tcp://")
 	return strings.HasPrefix(addr, "127.") ||
 		strings.HasPrefix(addr, "10.") ||
 		strings.HasPrefix(addr, "192.168.") ||

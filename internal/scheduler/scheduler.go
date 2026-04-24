@@ -4,6 +4,8 @@ import "generic-p2p/internal/core"
 
 type PeerCandidate struct {
 	PeerID       string
+	Addr         string
+	Transport    string
 	IsLAN        bool
 	Score        float64
 	HaveRanges   []core.HaveRange

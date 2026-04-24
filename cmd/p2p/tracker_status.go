@@ -108,9 +108,10 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 
 		for _, peer := range peers {
 			fmt.Printf(
-				"    %s addrs=%s have=%s lastSeen=%s\n",
+				"    %s addrs=%s udp=%s have=%s lastSeen=%s\n",
 				peer.PeerID,
 				strings.Join(peer.Addrs, ","),
+				strings.Join(peer.UDPAddrs, ","),
 				formatHaveRanges(peer.HaveRanges),
 				time.Unix(peer.LastSeenAt, 0).Format(time.RFC3339),
 			)

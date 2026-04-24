@@ -8,13 +8,16 @@ import (
 )
 
 type peerDiscoveryOptions struct {
-	contentID      string
-	explicitPeer   string
-	explicitPeers  string
-	lanEnabled     bool
-	lanAddr        string
-	trackerURL     string
-	selfListenAddr string
+	contentID         string
+	explicitPeer      string
+	explicitPeers     string
+	explicitUDPPeer   string
+	explicitUDPPeers  string
+	lanEnabled        bool
+	lanAddr           string
+	trackerURL        string
+	selfListenAddr    string
+	selfUDPListenAddr string
 }
 
 func main() {
@@ -58,8 +61,8 @@ func printUsage() {
   p2p share --path ./file.bin [--piece-size 1048576] [--data-dir .p2p]
   p2p tracker --listen 127.0.0.1:7000 [--state-file .p2p-tracker-state.json] [--web-data-dir .p2p-web] [--web-users-file users.json] [--peer-ttl 10s] [--cleanup-interval 2s]
   p2p tracker-status --tracker http://127.0.0.1:7000 [--pretty] [--watch] [--interval 1s]
-  p2p serve --path ./file.bin [--listen 127.0.0.1:9001] [--data-dir .p2p] [--lan] [--tracker http://127.0.0.1:7000]
-  p2p get --manifest .p2p/<contentId>/manifest.json --store-dir .p2p-store --out ./out.bin [--peer 127.0.0.1:9001] [--peers 127.0.0.1:9001,127.0.0.1:9002]
-  p2p get --manifest .p2p/<contentId>/manifest.json --store-dir .p2p-store --out ./out.bin --listen 127.0.0.1:9002 [--seed-after-download] [--peers ...] [--lan] [--tracker http://127.0.0.1:7000]
+  p2p serve --path ./file.bin [--listen 127.0.0.1:9001] [--udp-listen 127.0.0.1:9003] [--data-dir .p2p] [--lan] [--tracker http://127.0.0.1:7000]
+  p2p get --manifest .p2p/<contentId>/manifest.json --store-dir .p2p-store --out ./out.bin [--peer 127.0.0.1:9001] [--udp-peer 127.0.0.1:9003]
+  p2p get --manifest .p2p/<contentId>/manifest.json --store-dir .p2p-store --out ./out.bin --listen 127.0.0.1:9002 [--udp-listen 127.0.0.1:9004] [--seed-after-download] [--peers ...] [--udp-peers ...] [--lan] [--tracker http://127.0.0.1:7000]
   p2p status --manifest .p2p/<contentId>/manifest.json --store-dir .p2p-store [--pretty] [--watch] [--interval 1s]`)
 }

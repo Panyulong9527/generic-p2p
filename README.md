@@ -8,7 +8,9 @@ The current codebase is no longer just a LAN-only smoke prototype. It contains a
 
 - `share` builds a content-addressed manifest with per-piece SHA-256 hashes.
 - `serve` exposes a complete local file over the minimal TCP peer protocol.
+- `serve --udp-listen` exposes the same pieces over a minimal UDP transport.
 - `get` downloads verified pieces into a disk-backed piece store and assembles the final output.
+- `get --udp-peer` and `get --udp-peers` can pull pieces over UDP while TCP remains available.
 - `get --listen` lets a downloader serve completed pieces while downloading.
 - `get --seed-after-download` keeps a completed downloader alive as a peer.
 - `HAVE` ranges let peers advertise completed piece ranges.
@@ -32,12 +34,14 @@ Serve a complete source file:
 
 ```powershell
 p2p serve --path .\file.bin --listen 127.0.0.1:9001 --data-dir .\.p2p
+p2p serve --path .\file.bin --listen 127.0.0.1:9001 --udp-listen 127.0.0.1:9003 --data-dir .\.p2p
 ```
 
 Download from an explicit peer:
 
 ```powershell
 p2p get --manifest .\.p2p\<contentId>\manifest.json --store-dir .\.p2p-store --out .\out.bin --peer 127.0.0.1:9001
+p2p get --manifest .\.p2p\<contentId>\manifest.json --store-dir .\.p2p-store --out .\out.bin --udp-peer 127.0.0.1:9003
 ```
 
 Download while also serving completed pieces:
@@ -93,9 +97,11 @@ p2p tracker-status --tracker http://127.0.0.1:7000 --watch --interval 1s
 Use tracker discovery:
 
 ```powershell
-p2p serve --path .\file.bin --listen 127.0.0.1:9001 --data-dir .\.p2p --tracker http://127.0.0.1:7000
+p2p serve --path .\file.bin --listen 127.0.0.1:9001 --udp-listen 127.0.0.1:9003 --data-dir .\.p2p --tracker http://127.0.0.1:7000
 p2p get --manifest .\.p2p\<contentId>\manifest.json --store-dir .\.p2p-store --out .\out.bin --tracker http://127.0.0.1:7000
 ```
+
+When peers register both TCP and UDP addresses with the tracker, `get --tracker` can discover and use both transports. UDP is direct-address transport at this stage; non-LAN use still requires reachable ports or later NAT/relay support.
 
 Watch status:
 

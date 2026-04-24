@@ -49,6 +49,33 @@ func TestTrackerRegisterJoinAndGetPeers(t *testing.T) {
 	}
 }
 
+func TestTrackerStoresUDPAddrs(t *testing.T) {
+	server := NewServer()
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	client := NewClient(httpServer.URL)
+	ctx := context.Background()
+
+	if err := client.RegisterPeerWithUDP(ctx, "peer-a", []string{"127.0.0.1:9001"}, []string{"127.0.0.1:9003"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.JoinSwarm(ctx, "peer-a", "sha256-demo", []core.HaveRange{{Start: 0, End: 1}}); err != nil {
+		t.Fatal(err)
+	}
+
+	peers, err := client.GetPeers(ctx, "sha256-demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(peers) != 1 {
+		t.Fatalf("unexpected peer count: %d", len(peers))
+	}
+	if len(peers[0].UDPAddrs) != 1 || peers[0].UDPAddrs[0] != "127.0.0.1:9003" {
+		t.Fatalf("unexpected udp addrs: %#v", peers[0].UDPAddrs)
+	}
+}
+
 func TestTrackerPrunesExpiredPeers(t *testing.T) {
 	server := NewServer()
 	server.peerTTL = 20 * time.Millisecond

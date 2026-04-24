@@ -69,7 +69,10 @@ func runGet(logger *logging.Logger, args []string) error {
 	out := fs.String("out", "", "output file path")
 	peerAddr := fs.String("peer", "", "peer address such as 127.0.0.1:9001")
 	peerList := fs.String("peers", "", "comma separated peer addresses")
+	udpPeerAddr := fs.String("udp-peer", "", "UDP peer address such as 127.0.0.1:9003")
+	udpPeerList := fs.String("udp-peers", "", "comma separated UDP peer addresses")
 	listen := fs.String("listen", "", "optional listen address for serving completed pieces while downloading")
+	udpListen := fs.String("udp-listen", "", "optional UDP listen address for serving completed pieces")
 	seedAfterDownload := fs.Bool("seed-after-download", false, "keep serving after download completes when --listen is set")
 	lan := fs.Bool("lan", false, "enable LAN discovery")
 	lanAddr := fs.String("lan-addr", p2pnet.DefaultLANDiscoveryAddr, "LAN discovery UDP target/listen address")
@@ -140,10 +143,30 @@ func runGet(logger *logging.Logger, args []string) error {
 
 		if *trackerURL != "" {
 			go func() {
-				startTrackerSyncLoop(logger, *trackerURL, *listen, manifest.ContentID, time.Second, store.CompletedRanges)
+				startTrackerSyncLoop(logger, *trackerURL, *listen, *udpListen, manifest.ContentID, time.Second, store.CompletedRanges)
 			}()
 			logger.Info("tracker_sync_ready", "contentId", manifest.ContentID, "tracker", *trackerURL, "peer", *listen)
 		}
+	}
+	if *udpListen != "" {
+		udpServer := p2pnet.NewUDPServer(*udpListen, p2pnet.StoreContentSource{
+			Store: store,
+		})
+		udpServer.OnPieceServed = func(bytes int64, path string, peerID string) {
+			if runtime := store.RuntimeStats(); runtime != nil {
+				_ = runtime.RecordUpload(bytes, path, peerID)
+			}
+		}
+		go func() {
+			if serveErr := udpServer.Listen(context.Background()); serveErr != nil {
+				logger.Error("downloader_udp_serve_failed", "listen", *udpListen, "error", serveErr.Error())
+			}
+		}()
+		logger.Info("downloader_udp_serve_ready",
+			"contentId", manifest.ContentID,
+			"listen", *udpListen,
+			"completedRanges", store.CompletedRanges(),
+		)
 	}
 
 	peerAddrs := collectPeerAddrs(*peerAddr, *peerList)
@@ -163,13 +186,16 @@ func runGet(logger *logging.Logger, args []string) error {
 	}
 
 	discoveryOptions := peerDiscoveryOptions{
-		contentID:      manifest.ContentID,
-		explicitPeer:   *peerAddr,
-		explicitPeers:  *peerList,
-		lanEnabled:     *lan,
-		lanAddr:        *lanAddr,
-		trackerURL:     *trackerURL,
-		selfListenAddr: *listen,
+		contentID:         manifest.ContentID,
+		explicitPeer:      *peerAddr,
+		explicitPeers:     *peerList,
+		explicitUDPPeer:   *udpPeerAddr,
+		explicitUDPPeers:  *udpPeerList,
+		lanEnabled:        *lan,
+		lanAddr:           *lanAddr,
+		trackerURL:        *trackerURL,
+		selfListenAddr:    *listen,
+		selfUDPListenAddr: *udpListen,
 	}
 
 	if *workers <= 0 {
@@ -217,6 +243,7 @@ func runServe(logger *logging.Logger, args []string) error {
 	manifestPath := fs.String("manifest", "", "optional existing manifest path")
 	pieceSize := fs.Int64("piece-size", core.DefaultPieceSize, "piece size in bytes when building manifest")
 	listen := fs.String("listen", "127.0.0.1:9001", "listen address")
+	udpListen := fs.String("udp-listen", "", "optional UDP listen address")
 	dataDir := fs.String("data-dir", ".p2p", "directory for generated manifest")
 	lan := fs.Bool("lan", false, "enable LAN announcement")
 	lanAddr := fs.String("lan-addr", p2pnet.DefaultLANDiscoveryAddr, "LAN discovery UDP target address")
@@ -255,6 +282,18 @@ func runServe(logger *logging.Logger, args []string) error {
 		ManifestFile: manifest,
 		FilePath:     *path,
 	})
+	if *udpListen != "" {
+		udpServer := p2pnet.NewUDPServer(*udpListen, p2pnet.StaticContentSource{
+			ManifestFile: manifest,
+			FilePath:     *path,
+		})
+		go func() {
+			if serveErr := udpServer.Listen(context.Background()); serveErr != nil {
+				logger.Error("udp_serve_failed", "listen", *udpListen, "error", serveErr.Error())
+			}
+		}()
+		logger.Info("udp_serve_ready", "contentId", manifest.ContentID, "listen", *udpListen)
+	}
 
 	logger.Info("serve_ready",
 		"contentId", manifest.ContentID,
@@ -292,7 +331,7 @@ func runServe(logger *logging.Logger, args []string) error {
 
 	if *trackerURL != "" {
 		go func() {
-			startTrackerSyncLoop(logger, *trackerURL, *listen, manifest.ContentID, time.Second, func() []core.HaveRange {
+			startTrackerSyncLoop(logger, *trackerURL, *listen, *udpListen, manifest.ContentID, time.Second, func() []core.HaveRange {
 				if len(manifest.Pieces) == 0 {
 					return nil
 				}
