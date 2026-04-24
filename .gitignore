@@ -6,6 +6,7 @@
 .web-demo*/
 .udp-smoke/
 .udp-tracker-smoke/
+.observed-smoke/
 .p2p-web-users.json
 *.out.log
 *.err.log

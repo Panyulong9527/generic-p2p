@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,11 +16,13 @@ import (
 )
 
 type PeerRecord struct {
-	PeerID     string           `json:"peerId"`
-	Addrs      []string         `json:"addrs"`
-	UDPAddrs   []string         `json:"udpAddrs,omitempty"`
-	HaveRanges []core.HaveRange `json:"haveRanges"`
-	LastSeenAt int64            `json:"lastSeenAt"`
+	PeerID          string           `json:"peerId"`
+	Addrs           []string         `json:"addrs"`
+	UDPAddrs        []string         `json:"udpAddrs,omitempty"`
+	ObservedAddr    string           `json:"observedAddr,omitempty"`
+	ObservedUDPAddr string           `json:"observedUdpAddr,omitempty"`
+	HaveRanges      []core.HaveRange `json:"haveRanges"`
+	LastSeenAt      int64            `json:"lastSeenAt"`
 }
 
 type RegisterRequest struct {
@@ -163,6 +166,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	record.PeerID = req.PeerID
 	record.Addrs = req.Addrs
 	record.UDPAddrs = req.UDPAddrs
+	record.ObservedAddr = observedAddr(r, firstAddr(req.Addrs))
+	record.ObservedUDPAddr = observedAddr(r, firstAddr(req.UDPAddrs))
 	record.LastSeenAt = time.Now().Unix()
 	s.peers[req.PeerID] = record
 	if err := s.saveLocked(); err != nil {
@@ -335,6 +340,31 @@ func (s *Server) pruneExpiredLocked(now time.Time) {
 			}
 		}
 	}
+}
+
+func firstAddr(addrs []string) string {
+	for _, addr := range addrs {
+		addr = strings.TrimSpace(addr)
+		if addr != "" {
+			return addr
+		}
+	}
+	return ""
+}
+
+func observedAddr(r *http.Request, declaredAddr string) string {
+	if declaredAddr == "" {
+		return ""
+	}
+	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return ""
+	}
+	_, declaredPort, err := net.SplitHostPort(declaredAddr)
+	if err != nil {
+		return ""
+	}
+	return net.JoinHostPort(remoteHost, declaredPort)
 }
 
 type persistedState struct {

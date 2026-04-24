@@ -101,7 +101,7 @@ p2p serve --path .\file.bin --listen 127.0.0.1:9001 --udp-listen 127.0.0.1:9003 
 p2p get --manifest .\.p2p\<contentId>\manifest.json --store-dir .\.p2p-store --out .\out.bin --tracker http://127.0.0.1:7000
 ```
 
-When peers register both TCP and UDP addresses with the tracker, `get --tracker` can discover and use both transports. UDP is direct-address transport at this stage; non-LAN use still requires reachable ports or later NAT/relay support.
+When peers register both TCP and UDP addresses with the tracker, `get --tracker` can discover and use both transports. The tracker also records observed TCP/UDP address candidates from the registration request source IP and declared ports. UDP is still direct-address transport at this stage; non-LAN use requires reachable ports or later NAT/relay support.
 
 Watch status:
 

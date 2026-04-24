@@ -74,6 +74,18 @@ func TestTrackerStoresUDPAddrs(t *testing.T) {
 	if len(peers[0].UDPAddrs) != 1 || peers[0].UDPAddrs[0] != "127.0.0.1:9003" {
 		t.Fatalf("unexpected udp addrs: %#v", peers[0].UDPAddrs)
 	}
+	if peers[0].ObservedAddr == "" {
+		t.Fatal("expected observed tcp addr")
+	}
+	if peers[0].ObservedUDPAddr == "" {
+		t.Fatal("expected observed udp addr")
+	}
+	if !strings.HasSuffix(peers[0].ObservedAddr, ":9001") {
+		t.Fatalf("expected observed tcp addr to keep declared port, got %s", peers[0].ObservedAddr)
+	}
+	if !strings.HasSuffix(peers[0].ObservedUDPAddr, ":9003") {
+		t.Fatalf("expected observed udp addr to keep declared port, got %s", peers[0].ObservedUDPAddr)
+	}
 }
 
 func TestTrackerPrunesExpiredPeers(t *testing.T) {

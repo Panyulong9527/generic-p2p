@@ -33,6 +33,15 @@ func discoverTrackerPeers(logger *logging.Logger, contentID string, trackerURL s
 			)
 			addrs = append(addrs, addr)
 		}
+		if peer.ObservedAddr != "" && peer.ObservedAddr != selfListenAddr {
+			logger.Info("tracker_observed_peer_discovered",
+				"contentId", contentID,
+				"peerId", peer.PeerID,
+				"listen", peer.ObservedAddr,
+				"ranges", peer.HaveRanges,
+			)
+			addrs = append(addrs, peer.ObservedAddr)
+		}
 	}
 	return addrs, nil
 }
@@ -57,6 +66,15 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 				"ranges", peer.HaveRanges,
 			)
 			addrs = append(addrs, addr)
+		}
+		if peer.ObservedUDPAddr != "" && peer.ObservedUDPAddr != selfUDPListenAddr {
+			logger.Info("tracker_observed_udp_peer_discovered",
+				"contentId", contentID,
+				"peerId", peer.PeerID,
+				"listen", peer.ObservedUDPAddr,
+				"ranges", peer.HaveRanges,
+			)
+			addrs = append(addrs, peer.ObservedUDPAddr)
 		}
 	}
 	return addrs, nil
