@@ -358,6 +358,10 @@ const webAppHTML = `<!doctype html>
       margin-top: 24px;
       align-items: start;
     }
+    .stack {
+      display: grid;
+      gap: 18px;
+    }
     section {
       background: rgba(255, 250, 241, 0.9);
       border: 1px solid var(--line);
@@ -381,6 +385,28 @@ const webAppHTML = `<!doctype html>
       border-radius: 8px;
       background: #fffdf8;
       color: var(--ink);
+    }
+    .dropzone {
+      display: grid;
+      gap: 10px;
+      padding: 16px;
+      border: 1px dashed var(--accent);
+      border-radius: 8px;
+      background: #fffdf8;
+    }
+    .dropzone.dragging {
+      border-color: var(--warm);
+      background: #fff4e8;
+    }
+    .drop-hint {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    progress {
+      width: 100%;
+      height: 14px;
+      accent-color: var(--accent);
     }
     button, .button {
       display: inline-flex;
@@ -409,6 +435,16 @@ const webAppHTML = `<!doctype html>
     .shares {
       display: grid;
       gap: 10px;
+    }
+    .section-title {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .section-title h2 {
+      margin: 0;
     }
     .share {
       display: grid;
@@ -443,6 +479,39 @@ const webAppHTML = `<!doctype html>
       color: var(--muted);
       background: rgba(255, 255, 255, 0.45);
     }
+    .tracker {
+      display: grid;
+      gap: 10px;
+    }
+    .metric-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    .metric {
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fffdf8;
+    }
+    .metric strong {
+      display: block;
+      font-size: 20px;
+    }
+    .metric span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .swarm {
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fffdf8;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
     .badge {
       display: inline-block;
       margin-left: 8px;
@@ -456,6 +525,7 @@ const webAppHTML = `<!doctype html>
       .grid { grid-template-columns: 1fr; }
       .share { grid-template-columns: 1fr; }
       .actions { justify-content: flex-start; }
+      .metric-row { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -466,16 +536,33 @@ const webAppHTML = `<!doctype html>
       <p class="subhead">Open this tracker address from devices on the same LAN. Upload a file here, and other devices can immediately see and download it. This is a test demo; uploaded files are stored on the tracker machine.</p>
     </header>
     <div class="grid">
+      <div class="stack">
+        <section>
+          <h2>Share File</h2>
+          <form id="uploadForm">
+            <label id="dropzone" class="dropzone">
+              <input id="fileInput" name="file" type="file" required>
+              <span class="drop-hint">Drop a file here or choose one from this device.</span>
+            </label>
+            <progress id="uploadProgress" value="0" max="100" hidden></progress>
+            <button id="uploadButton" type="submit">Upload and Share</button>
+            <div id="uploadStatus" class="status"></div>
+          </form>
+        </section>
+        <section>
+          <div class="section-title">
+            <h2>Tracker</h2>
+            <button id="refreshButton" class="secondary" type="button">Refresh</button>
+          </div>
+          <div id="trackerStatus" class="tracker">
+            <div class="empty">Loading tracker status...</div>
+          </div>
+        </section>
+      </div>
       <section>
-        <h2>Share File</h2>
-        <form id="uploadForm">
-          <input id="fileInput" name="file" type="file" required>
-          <button id="uploadButton" type="submit">Upload and Share</button>
-          <div id="uploadStatus" class="status"></div>
-        </form>
-      </section>
-      <section>
-        <h2>Current Shares</h2>
+        <div class="section-title">
+          <h2>Current Shares</h2>
+        </div>
         <div id="shares" class="shares">
           <div class="empty">Loading shares...</div>
         </div>
@@ -488,6 +575,10 @@ const webAppHTML = `<!doctype html>
     const fileInput = document.querySelector("#fileInput");
     const uploadButton = document.querySelector("#uploadButton");
     const uploadStatus = document.querySelector("#uploadStatus");
+    const uploadProgress = document.querySelector("#uploadProgress");
+    const dropzone = document.querySelector("#dropzone");
+    const refreshButton = document.querySelector("#refreshButton");
+    const trackerStatusEl = document.querySelector("#trackerStatus");
 
     function formatBytes(value) {
       if (value < 1024) return value + " B";
@@ -523,6 +614,36 @@ const webAppHTML = `<!doctype html>
       ).join("");
     }
 
+    function renderTrackerStatus(status) {
+      const swarms = status.swarms || [];
+      const swarmHTML = swarms.length
+        ? swarms.map((swarm) =>
+          '<div class="swarm">' +
+            '<strong>' + escapeHTML(shortContentId(swarm.contentId)) + '</strong><br>' +
+            swarm.peerCount + ' peers / ' + peerSummary(swarm.peers || []) +
+          '</div>'
+        ).join("")
+        : '<div class="empty">No active P2P swarms.</div>';
+
+      trackerStatusEl.innerHTML =
+        '<div class="metric-row">' +
+          '<div class="metric"><strong>' + status.peerCount + '</strong><span>peers</span></div>' +
+          '<div class="metric"><strong>' + status.swarmCount + '</strong><span>swarms</span></div>' +
+          '<div class="metric"><strong>' + status.peerTtlSeconds + 's</strong><span>peer TTL</span></div>' +
+        '</div>' +
+        swarmHTML;
+    }
+
+    function shortContentId(contentId) {
+      if (!contentId || contentId.length <= 20) return contentId || "";
+      return contentId.slice(0, 20) + "...";
+    }
+
+    function peerSummary(peers) {
+      if (!peers.length) return "no peers";
+      return peers.map((peer) => escapeHTML(peer.peerId || "peer")).join(", ");
+    }
+
     function escapeHTML(value) {
       return String(value)
         .replaceAll("&", "&amp;")
@@ -538,30 +659,89 @@ const webAppHTML = `<!doctype html>
       renderShares(body.shares || []);
     }
 
+    async function refreshTrackerStatus() {
+      const response = await fetch("/v1/status");
+      if (!response.ok) throw new Error(await response.text());
+      renderTrackerStatus(await response.json());
+    }
+
+    function uploadSelectedFile(file) {
+      return new Promise((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        const formData = new FormData();
+        formData.append("file", file);
+
+        request.open("POST", "/v1/web/shares");
+        request.upload.addEventListener("progress", (event) => {
+          if (!event.lengthComputable) return;
+          uploadProgress.hidden = false;
+          uploadProgress.value = Math.round((event.loaded / event.total) * 100);
+        });
+        request.addEventListener("load", () => {
+          if (request.status < 200 || request.status >= 300) {
+            reject(new Error(request.responseText || request.statusText));
+            return;
+          }
+          resolve(JSON.parse(request.responseText));
+        });
+        request.addEventListener("error", () => reject(new Error("upload failed")));
+        request.send(formData);
+      });
+    }
+
     uploadForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       if (!fileInput.files.length) return;
       uploadButton.disabled = true;
       uploadStatus.textContent = "Uploading...";
+      uploadProgress.hidden = false;
+      uploadProgress.value = 0;
       try {
-        const formData = new FormData();
-        formData.append("file", fileInput.files[0]);
-        const response = await fetch("/v1/web/shares", { method: "POST", body: formData });
-        if (!response.ok) throw new Error(await response.text());
+        await uploadSelectedFile(fileInput.files[0]);
         uploadStatus.textContent = "Shared: " + fileInput.files[0].name;
         fileInput.value = "";
         await refreshShares();
+        await refreshTrackerStatus();
       } catch (error) {
         uploadStatus.textContent = error.message || String(error);
       } finally {
         uploadButton.disabled = false;
+        uploadProgress.hidden = true;
       }
     });
+
+    for (const eventName of ["dragenter", "dragover"]) {
+      dropzone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        dropzone.classList.add("dragging");
+      });
+    }
+    for (const eventName of ["dragleave", "drop"]) {
+      dropzone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        dropzone.classList.remove("dragging");
+      });
+    }
+    dropzone.addEventListener("drop", (event) => {
+      if (!event.dataTransfer.files.length) return;
+      fileInput.files = event.dataTransfer.files;
+      uploadStatus.textContent = "Ready: " + event.dataTransfer.files[0].name;
+    });
+    refreshButton.addEventListener("click", () => refreshAll().catch((error) => {
+      trackerStatusEl.innerHTML = '<div class="empty">' + escapeHTML(error.message || String(error)) + '</div>';
+    }));
+
+    async function refreshAll() {
+      await Promise.all([refreshShares(), refreshTrackerStatus()]);
+    }
 
     refreshShares().catch((error) => {
       sharesEl.innerHTML = '<div class="empty">' + escapeHTML(error.message || String(error)) + '</div>';
     });
-    setInterval(() => refreshShares().catch(() => {}), 3000);
+    refreshTrackerStatus().catch((error) => {
+      trackerStatusEl.innerHTML = '<div class="empty">' + escapeHTML(error.message || String(error)) + '</div>';
+    });
+    setInterval(() => refreshAll().catch(() => {}), 3000);
   </script>
 </body>
 </html>`
