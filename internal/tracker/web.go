@@ -620,6 +620,26 @@ const webAppHTML = `<!doctype html>
       background: rgba(93, 107, 99, 0.08);
       border-color: rgba(93, 107, 99, 0.18);
     }
+    .chip-route-udp {
+      color: #0d4f37;
+      background: rgba(23, 109, 77, 0.12);
+      border-color: rgba(23, 109, 77, 0.25);
+    }
+    .chip-route-mixed {
+      color: #8a4a18;
+      background: rgba(199, 95, 42, 0.12);
+      border-color: rgba(199, 95, 42, 0.25);
+    }
+    .chip-route-tcp {
+      color: #7a2b23;
+      background: rgba(159, 58, 47, 0.12);
+      border-color: rgba(159, 58, 47, 0.25);
+    }
+    .chip-route-none {
+      color: var(--muted);
+      background: rgba(93, 107, 99, 0.08);
+      border-color: rgba(93, 107, 99, 0.18);
+    }
     @media (max-width: 760px) {
       main { width: min(100vw - 20px, 1120px); padding-top: 18px; }
       .grid { grid-template-columns: 1fr; }
@@ -803,7 +823,7 @@ const webAppHTML = `<!doctype html>
       return peers.map((peer) => {
         const result = udpProbeResultMap[peer.peerId || ""] || null;
         return '<div class="swarm">' +
-          '<strong>' + escapeHTML(peer.peerId || "peer") + '</strong> ' + formatProbeResultChip(result) + '<br>' +
+          '<strong>' + escapeHTML(peer.peerId || "peer") + '</strong> ' + formatProbeResultChip(result) + ' ' + formatRouteChip(peer, result) + '<br>' +
           'udp ' + escapeHTML((peer.udpAddrs || []).join(",") || "-") +
           '<br>observed ' + escapeHTML(peer.observedUdpAddr || "-") +
           '<br>have ' + escapeHTML(formatHaveRanges(peer.haveRanges || [])) +
@@ -833,6 +853,41 @@ const webAppHTML = `<!doctype html>
         return '<span class="chip chip-fail">' + escapeHTML(kind || "failure") + '</span>';
       }
       return '<span class="chip chip-idle">no result</span>';
+    }
+
+    function formatRouteChip(peer, result) {
+      const advice = peerRouteAdvice(peer, result);
+      return '<span class="chip ' + advice.className + '">' + escapeHTML(advice.label) + '</span>';
+    }
+
+    function peerRouteAdvice(peer, result) {
+      const udpAddrs = peer && Array.isArray(peer.udpAddrs) ? peer.udpAddrs.filter(Boolean) : [];
+      const hasObservedUDP = Boolean(peer && peer.observedUdpAddr);
+      const hasUDPPath = udpAddrs.length > 0 || hasObservedUDP;
+      if (!hasUDPPath) {
+        return { className: "chip-route-none", label: "tcp only" };
+      }
+      if (!result) {
+        return hasObservedUDP
+          ? { className: "chip-route-udp", label: "prefer udp" }
+          : { className: "chip-route-mixed", label: "try udp" };
+      }
+
+      const lastSuccess = Number(result.lastSuccessAt || 0);
+      const lastFailure = Number(result.lastFailureAt || 0);
+      if (lastSuccess > lastFailure) {
+        return { className: "chip-route-udp", label: "prefer udp" };
+      }
+      if (lastFailure > 0) {
+        const kind = String(result.lastErrorKind || "").trim();
+        if (kind === "udp_timeout") {
+          return { className: "chip-route-mixed", label: "udp fallback" };
+        }
+        return { className: "chip-route-tcp", label: "prefer tcp" };
+      }
+      return hasObservedUDP
+        ? { className: "chip-route-udp", label: "prefer udp" }
+        : { className: "chip-route-mixed", label: "try udp" };
     }
 
     function formatHaveRanges(ranges) {
