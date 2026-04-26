@@ -692,6 +692,7 @@ const webAppHTML = `<!doctype html>
     function renderTrackerStatus(status) {
       const swarms = status.swarms || [];
       const pendingUdpProbes = status.pendingUdpProbes || [];
+      const udpProbeResults = status.udpProbeResults || [];
       const swarmHTML = swarms.length
         ? swarms.map((swarm) =>
           '<div class="swarm">' +
@@ -711,6 +712,22 @@ const webAppHTML = `<!doctype html>
             ).join("") +
           '</div>'
         : '';
+      const udpResultHTML = udpProbeResults.length
+        ? '<div class="subsection">' +
+            '<h3>UDP Probe Results</h3>' +
+            udpProbeResults.map((item) =>
+              '<div class="swarm">' +
+                '<strong>' + escapeHTML(item.targetPeerId || "peer") + '</strong><br>' +
+                'success ' + (item.successCount || 0) + ' / failure ' + (item.failureCount || 0) +
+                '<br>last success ' + formatTimestamp(item.lastSuccessAt) +
+                '<br>last failure ' + formatTimestamp(item.lastFailureAt) +
+                '<br>last error ' + escapeHTML(item.lastErrorKind || "-") +
+                '<br>requester ' + escapeHTML(item.lastRequesterPeerId || "-") +
+                '<br>content ' + escapeHTML(shortContentId(item.lastContentId || "-")) +
+              '</div>'
+            ).join("") +
+          '</div>'
+        : '';
 
       trackerStatusEl.innerHTML =
         '<div class="metric-row">' +
@@ -719,11 +736,17 @@ const webAppHTML = `<!doctype html>
           '<div class="metric"><strong>' + (status.pendingUdpProbeCount || 0) + '</strong><span>pending UDP probes</span></div>' +
         '</div>' +
         '<div class="metric-row">' +
+          '<div class="metric"><strong>' + (status.recentUdpProbeSuccesses || 0) + '</strong><span>UDP probe success</span></div>' +
+          '<div class="metric"><strong>' + (status.recentUdpProbeFailures || 0) + '</strong><span>UDP probe failure</span></div>' +
           '<div class="metric"><strong>' + status.peerTtlSeconds + 's</strong><span>peer TTL</span></div>' +
+        '</div>' +
+        '<div class="metric-row">' +
           '<div class="metric"><strong>' + status.cleanupIntervalSeconds + 's</strong><span>cleanup interval</span></div>' +
           '<div class="metric"><strong>' + escapeHTML(status.statePath || "-") + '</strong><span>state file</span></div>' +
+          '<div class="metric"><strong>' + udpProbeResults.length + '</strong><span>tracked UDP peers</span></div>' +
         '</div>' +
         pendingHTML +
+        udpResultHTML +
         swarmHTML;
     }
 
@@ -735,6 +758,11 @@ const webAppHTML = `<!doctype html>
     function peerSummary(peers) {
       if (!peers.length) return "no peers";
       return peers.map((peer) => escapeHTML(peer.peerId || "peer")).join(", ");
+    }
+
+    function formatTimestamp(value) {
+      if (!value) return "-";
+      return new Date(value * 1000).toLocaleString();
     }
 
     function escapeHTML(value) {
