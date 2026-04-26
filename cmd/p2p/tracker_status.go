@@ -174,6 +174,7 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 	}
 	for _, swarm := range swarms {
 		swarmMiss, swarmRecovered, swarmAligned := summarizeSwarmRouteDrift(swarm, udpProbeResults, peerTransferPaths)
+		offenders := summarizeSwarmOffenders(swarm, udpProbeResults, peerTransferPaths)
 		fmt.Printf(
 			"  %s peers=%d udpMiss=%d udpRecovered=%d routeAligned=%d\n",
 			shortContentID(swarm.ContentID),
@@ -182,6 +183,9 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 			swarmRecovered,
 			swarmAligned,
 		)
+		if len(offenders) > 0 {
+			fmt.Printf("    topUdpMissPeers=%s\n", strings.Join(offenders, ","))
+		}
 
 		peers := append([]tracker.PeerRecord(nil), swarm.Peers...)
 		sort.Slice(peers, func(i, j int) bool {
@@ -297,6 +301,47 @@ func summarizeSwarmRouteDrift(swarm tracker.SwarmStatus, udpProbeResults map[str
 		}
 	}
 	return udpMiss, udpRecovered, aligned
+}
+
+func summarizeSwarmOffenders(swarm tracker.SwarmStatus, udpProbeResults map[string]tracker.UDPProbeResultStatus, peerTransferPaths map[string]tracker.PeerTransferPathStatus) []string {
+	type offender struct {
+		peerID   string
+		tcpCount int
+		lastAt   int64
+	}
+	offenders := make([]offender, 0, len(swarm.Peers))
+	for _, peer := range swarm.Peers {
+		actual := peerTransferPaths[peer.PeerID]
+		if strings.TrimSpace(actual.LastPath) == "" {
+			continue
+		}
+		advice := trackerPeerRouteAdvice(peer, udpProbeResults[peer.PeerID])
+		if trackerRouteDrift(advice, actual.LastPath) != "udp_miss" {
+			continue
+		}
+		offenders = append(offenders, offender{
+			peerID:   peer.PeerID,
+			tcpCount: actual.TCPCount,
+			lastAt:   actual.LastAt,
+		})
+	}
+	sort.Slice(offenders, func(i, j int) bool {
+		if offenders[i].tcpCount != offenders[j].tcpCount {
+			return offenders[i].tcpCount > offenders[j].tcpCount
+		}
+		if offenders[i].lastAt != offenders[j].lastAt {
+			return offenders[i].lastAt > offenders[j].lastAt
+		}
+		return offenders[i].peerID < offenders[j].peerID
+	})
+	if len(offenders) > 3 {
+		offenders = offenders[:3]
+	}
+	result := make([]string, 0, len(offenders))
+	for _, item := range offenders {
+		result = append(result, fmt.Sprintf("%s(tcp=%d)", item.peerID, item.tcpCount))
+	}
+	return result
 }
 
 func formatHaveRanges(ranges []core.HaveRange) string {

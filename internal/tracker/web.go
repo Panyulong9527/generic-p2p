@@ -771,11 +771,13 @@ const webAppHTML = `<!doctype html>
         ? swarms.map((swarm) =>
           (() => {
             const swarmRouteSummary = summarizeSingleSwarmRouteDrift(swarm, udpProbeResultMap, peerTransferPathMap);
+            const offenders = summarizeSwarmOffenders(swarm, udpProbeResultMap, peerTransferPathMap);
             return (
           '<div class="swarm">' +
             '<strong>' + escapeHTML(shortContentId(swarm.contentId)) + '</strong><br>' +
             swarm.peerCount + ' peers' +
             '<br><span class="meta-inline">udp miss ' + swarmRouteSummary.udpMiss + ' / udp recovered ' + swarmRouteSummary.udpRecovered + ' / aligned ' + swarmRouteSummary.aligned + '</span>' +
+            formatSwarmOffenders(offenders) +
             '<div class="subsection">' +
               renderSwarmPeers(swarm.peers || [], udpProbeResultMap, peerTransferPathMap) +
             '</div>' +
@@ -1014,6 +1016,42 @@ const webAppHTML = `<!doctype html>
         summary.aligned += 1;
       }
       return summary;
+    }
+
+    function summarizeSwarmOffenders(swarm, udpProbeResultMap, peerTransferPathMap) {
+      const offenders = [];
+      for (const peer of (swarm && swarm.peers) || []) {
+        const route = peerRouteAdvice(peer, udpProbeResultMap[peer.peerId || ""] || null);
+        const transfer = peerTransferPathMap[peer.peerId || ""] || null;
+        const drift = peerRouteDrift(route, transfer);
+        if (!drift || drift.label !== "udp miss") {
+          continue;
+        }
+        offenders.push({
+          peerId: peer.peerId || "peer",
+          tcpCount: Number((transfer && transfer.tcpCount) || 0),
+          lastAt: Number((transfer && transfer.lastAt) || 0),
+        });
+      }
+      offenders.sort((left, right) => {
+        if (left.tcpCount !== right.tcpCount) {
+          return right.tcpCount - left.tcpCount;
+        }
+        if (left.lastAt !== right.lastAt) {
+          return right.lastAt - left.lastAt;
+        }
+        return left.peerId.localeCompare(right.peerId);
+      });
+      return offenders.slice(0, 3);
+    }
+
+    function formatSwarmOffenders(offenders) {
+      if (!offenders || !offenders.length) {
+        return '';
+      }
+      return '<br><span class="meta-inline">top udp miss peers: ' + offenders.map((item) =>
+        escapeHTML(item.peerId) + ' (tcp ' + item.tcpCount + ')'
+      ).join(', ') + '</span>';
     }
 
     function recommendedTransport(advice) {
