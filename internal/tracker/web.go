@@ -568,6 +568,18 @@ const webAppHTML = `<!doctype html>
       line-height: 1.45;
       overflow-wrap: anywhere;
     }
+    .subsection {
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .subsection h3 {
+      margin: 0;
+      font-size: 13px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
     .badge {
       display: inline-block;
       margin-left: 8px;
@@ -679,6 +691,7 @@ const webAppHTML = `<!doctype html>
 
     function renderTrackerStatus(status) {
       const swarms = status.swarms || [];
+      const pendingUdpProbes = status.pendingUdpProbes || [];
       const swarmHTML = swarms.length
         ? swarms.map((swarm) =>
           '<div class="swarm">' +
@@ -687,13 +700,30 @@ const webAppHTML = `<!doctype html>
           '</div>'
         ).join("")
         : '<div class="empty">No active P2P swarms.</div>';
+      const pendingHTML = pendingUdpProbes.length
+        ? '<div class="subsection">' +
+            '<h3>Pending UDP Probe Tasks</h3>' +
+            pendingUdpProbes.map((item) =>
+              '<div class="swarm">' +
+                '<strong>' + escapeHTML(item.targetPeerId || "peer") + '</strong><br>' +
+                item.requestCount + ' queued coordination requests' +
+              '</div>'
+            ).join("") +
+          '</div>'
+        : '';
 
       trackerStatusEl.innerHTML =
         '<div class="metric-row">' +
           '<div class="metric"><strong>' + status.peerCount + '</strong><span>peers</span></div>' +
           '<div class="metric"><strong>' + status.swarmCount + '</strong><span>swarms</span></div>' +
-          '<div class="metric"><strong>' + status.peerTtlSeconds + 's</strong><span>peer TTL</span></div>' +
+          '<div class="metric"><strong>' + (status.pendingUdpProbeCount || 0) + '</strong><span>pending UDP probes</span></div>' +
         '</div>' +
+        '<div class="metric-row">' +
+          '<div class="metric"><strong>' + status.peerTtlSeconds + 's</strong><span>peer TTL</span></div>' +
+          '<div class="metric"><strong>' + status.cleanupIntervalSeconds + 's</strong><span>cleanup interval</span></div>' +
+          '<div class="metric"><strong>' + escapeHTML(status.statePath || "-") + '</strong><span>state file</span></div>' +
+        '</div>' +
+        pendingHTML +
         swarmHTML;
     }
 
