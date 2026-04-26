@@ -73,6 +73,12 @@ type ReportUDPProbeResultRequest struct {
 	ErrorKind       string `json:"errorKind,omitempty"`
 }
 
+type ReportTransferPathRequest struct {
+	TargetPeerID string `json:"targetPeerId"`
+	ContentID    string `json:"contentId"`
+	Transport    string `json:"transport"`
+}
+
 type SwarmStatus struct {
 	ContentID string       `json:"contentId"`
 	PeerCount int          `json:"peerCount"`
@@ -95,19 +101,29 @@ type UDPProbeResultStatus struct {
 	LastContentID   string `json:"lastContentId,omitempty"`
 }
 
+type PeerTransferPathStatus struct {
+	TargetPeerID string `json:"targetPeerId"`
+	ContentID    string `json:"contentId,omitempty"`
+	LastPath     string `json:"lastPath,omitempty"`
+	LastAt       int64  `json:"lastAt,omitempty"`
+	UDPCount     int    `json:"udpCount"`
+	TCPCount     int    `json:"tcpCount"`
+}
+
 type StatusResponse struct {
-	GeneratedAt             string                  `json:"generatedAt"`
-	PeerCount               int                     `json:"peerCount"`
-	SwarmCount              int                     `json:"swarmCount"`
-	PendingUDPProbeCount    int                     `json:"pendingUdpProbeCount"`
-	RecentUDPProbeSuccesses int                     `json:"recentUdpProbeSuccesses"`
-	RecentUDPProbeFailures  int                     `json:"recentUdpProbeFailures"`
-	PeerTTLSeconds          int                     `json:"peerTtlSeconds"`
-	CleanupIntervalSeconds  int                     `json:"cleanupIntervalSeconds"`
-	StatePath               string                  `json:"statePath,omitempty"`
-	PendingUDPProbes        []PendingUDPProbeStatus `json:"pendingUdpProbes,omitempty"`
-	UDPProbeResults         []UDPProbeResultStatus  `json:"udpProbeResults,omitempty"`
-	Swarms                  []SwarmStatus           `json:"swarms"`
+	GeneratedAt             string                   `json:"generatedAt"`
+	PeerCount               int                      `json:"peerCount"`
+	SwarmCount              int                      `json:"swarmCount"`
+	PendingUDPProbeCount    int                      `json:"pendingUdpProbeCount"`
+	RecentUDPProbeSuccesses int                      `json:"recentUdpProbeSuccesses"`
+	RecentUDPProbeFailures  int                      `json:"recentUdpProbeFailures"`
+	PeerTTLSeconds          int                      `json:"peerTtlSeconds"`
+	CleanupIntervalSeconds  int                      `json:"cleanupIntervalSeconds"`
+	StatePath               string                   `json:"statePath,omitempty"`
+	PendingUDPProbes        []PendingUDPProbeStatus  `json:"pendingUdpProbes,omitempty"`
+	UDPProbeResults         []UDPProbeResultStatus   `json:"udpProbeResults,omitempty"`
+	PeerTransferPaths       []PeerTransferPathStatus `json:"peerTransferPaths,omitempty"`
+	Swarms                  []SwarmStatus            `json:"swarms"`
 }
 
 type udpProbeResultSummary struct {
@@ -120,12 +136,21 @@ type udpProbeResultSummary struct {
 	LastContentID   string
 }
 
+type peerTransferPathSummary struct {
+	ContentID string
+	LastPath  string
+	LastAt    int64
+	UDPCount  int
+	TCPCount  int
+}
+
 type Server struct {
 	mu              sync.Mutex
 	peers           map[string]PeerRecord
 	swarms          map[string]map[string]bool
 	udpProbes       map[string][]UDPProbeTask
 	udpProbeResults map[string]udpProbeResultSummary
+	peerTransfers   map[string]peerTransferPathSummary
 	peerTTL         time.Duration
 	cleanupInterval time.Duration
 	statePath       string
@@ -141,6 +166,7 @@ func NewServer() *Server {
 		swarms:          make(map[string]map[string]bool),
 		udpProbes:       make(map[string][]UDPProbeTask),
 		udpProbeResults: make(map[string]udpProbeResultSummary),
+		peerTransfers:   make(map[string]peerTransferPathSummary),
 		peerTTL:         10 * time.Second,
 		cleanupInterval: 2 * time.Second,
 		webDataDir:      defaultWebDataDir,
@@ -169,6 +195,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/udp/probes/request", s.handleRequestUDPProbe)
 	mux.HandleFunc("/v1/udp/probes/poll", s.handlePollUDPProbeRequests)
 	mux.HandleFunc("/v1/udp/probes/report", s.handleReportUDPProbeResult)
+	mux.HandleFunc("/v1/transfers/report", s.handleReportTransferPath)
 	mux.HandleFunc("/v1/swarms/join", s.handleJoin)
 	mux.HandleFunc("/v1/swarms/", s.handleGetPeers)
 	mux.HandleFunc("/v1/status", s.handleStatus)
@@ -424,6 +451,47 @@ func (s *Server) handleReportUDPProbeResult(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
+func (s *Server) handleReportTransferPath(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req ReportTransferPathRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.TargetPeerID) == "" || strings.TrimSpace(req.ContentID) == "" {
+		http.Error(w, "targetPeerId and contentId are required", http.StatusBadRequest)
+		return
+	}
+
+	transport := strings.ToLower(strings.TrimSpace(req.Transport))
+	if transport != "udp" && transport != "tcp" {
+		http.Error(w, "transport must be udp or tcp", http.StatusBadRequest)
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneExpiredLocked(time.Now())
+
+	summary := s.peerTransfers[req.TargetPeerID]
+	summary.ContentID = req.ContentID
+	summary.LastPath = transport
+	summary.LastAt = time.Now().Unix()
+	switch transport {
+	case "udp":
+		summary.UDPCount++
+	case "tcp":
+		summary.TCPCount++
+	}
+	s.peerTransfers[req.TargetPeerID] = summary
+
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
 func (s *Server) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(s.cleanupInterval)
 	defer ticker.Stop()
@@ -466,6 +534,7 @@ func (s *Server) Status() StatusResponse {
 		SwarmCount:             len(s.swarms),
 		PendingUDPProbes:       make([]PendingUDPProbeStatus, 0, len(s.udpProbes)),
 		UDPProbeResults:        make([]UDPProbeResultStatus, 0, len(s.udpProbeResults)),
+		PeerTransferPaths:      make([]PeerTransferPathStatus, 0, len(s.peerTransfers)),
 		PeerTTLSeconds:         int(s.peerTTL / time.Second),
 		CleanupIntervalSeconds: int(s.cleanupInterval / time.Second),
 		StatePath:              s.statePath,
@@ -511,6 +580,16 @@ func (s *Server) Status() StatusResponse {
 			LastContentID:   summary.LastContentID,
 		})
 	}
+	for targetPeerID, summary := range s.peerTransfers {
+		response.PeerTransferPaths = append(response.PeerTransferPaths, PeerTransferPathStatus{
+			TargetPeerID: targetPeerID,
+			ContentID:    summary.ContentID,
+			LastPath:     summary.LastPath,
+			LastAt:       summary.LastAt,
+			UDPCount:     summary.UDPCount,
+			TCPCount:     summary.TCPCount,
+		})
+	}
 
 	return response
 }
@@ -532,6 +611,7 @@ func (s *Server) pruneExpiredLocked(now time.Time) {
 		delete(s.peers, peerID)
 		delete(s.udpProbes, peerID)
 		delete(s.udpProbeResults, peerID)
+		delete(s.peerTransfers, peerID)
 		for contentID, peerSet := range s.swarms {
 			delete(peerSet, peerID)
 			if len(peerSet) == 0 {
@@ -755,6 +835,15 @@ func (c *Client) ReportUDPProbeResult(ctx context.Context, targetPeerID string, 
 		ErrorKind:       errorKind,
 	}
 	return c.postJSON(ctx, "/v1/udp/probes/report", reqBody, nil)
+}
+
+func (c *Client) ReportTransferPath(ctx context.Context, targetPeerID string, contentID string, transport string) error {
+	reqBody := ReportTransferPathRequest{
+		TargetPeerID: targetPeerID,
+		ContentID:    contentID,
+		Transport:    transport,
+	}
+	return c.postJSON(ctx, "/v1/transfers/report", reqBody, nil)
 }
 
 func (c *Client) GetStatus(ctx context.Context) (StatusResponse, error) {

@@ -125,6 +125,27 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 			)
 		}
 	}
+	if len(status.PeerTransferPaths) > 0 {
+		fmt.Println("peerTransferPaths")
+		paths := append([]tracker.PeerTransferPathStatus(nil), status.PeerTransferPaths...)
+		sort.Slice(paths, func(i, j int) bool {
+			if paths[i].LastAt != paths[j].LastAt {
+				return paths[i].LastAt > paths[j].LastAt
+			}
+			return paths[i].TargetPeerID < paths[j].TargetPeerID
+		})
+		for _, item := range paths {
+			fmt.Printf(
+				"  %s lastPath=%s lastAt=%s udp=%d tcp=%d content=%s\n",
+				item.TargetPeerID,
+				emptyDash(item.LastPath),
+				formatUnixTime(item.LastAt),
+				item.UDPCount,
+				item.TCPCount,
+				shortContentID(item.ContentID),
+			)
+		}
+	}
 	if len(status.Swarms) == 0 {
 		fmt.Println("swarms none")
 		return

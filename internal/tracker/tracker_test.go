@@ -256,6 +256,12 @@ func TestTrackerStatusIncludesSwarmDetails(t *testing.T) {
 	if err := client.ReportUDPProbeResult(ctx, "peer-a", "peer-b", "sha256-demo", true, ""); err != nil {
 		t.Fatal(err)
 	}
+	if err := client.ReportTransferPath(ctx, "peer-a", "sha256-demo", "udp"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ReportTransferPath(ctx, "peer-a", "sha256-demo", "tcp"); err != nil {
+		t.Fatal(err)
+	}
 	status, err = client.GetStatus(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -265,6 +271,15 @@ func TestTrackerStatusIncludesSwarmDetails(t *testing.T) {
 	}
 	if len(status.UDPProbeResults) != 1 || status.UDPProbeResults[0].SuccessCount != 1 {
 		t.Fatalf("unexpected udp probe result status: %#v", status.UDPProbeResults)
+	}
+	if len(status.PeerTransferPaths) != 1 {
+		t.Fatalf("unexpected peer transfer path count: %#v", status.PeerTransferPaths)
+	}
+	if status.PeerTransferPaths[0].TargetPeerID != "peer-a" || status.PeerTransferPaths[0].LastPath != "tcp" {
+		t.Fatalf("unexpected peer transfer path status: %#v", status.PeerTransferPaths)
+	}
+	if status.PeerTransferPaths[0].UDPCount != 1 || status.PeerTransferPaths[0].TCPCount != 1 {
+		t.Fatalf("unexpected transfer path counters: %#v", status.PeerTransferPaths[0])
 	}
 }
 

@@ -588,6 +588,10 @@ const webAppHTML = `<!doctype html>
       font-weight: 800;
       text-transform: uppercase;
     }
+    .meta-inline {
+      color: var(--muted);
+      font-size: 12px;
+    }
     .chip {
       display: inline-flex;
       align-items: center;
@@ -745,8 +749,12 @@ const webAppHTML = `<!doctype html>
       const swarms = status.swarms || [];
       const pendingUdpProbes = status.pendingUdpProbes || [];
       const udpProbeResults = status.udpProbeResults || [];
+      const peerTransferPaths = status.peerTransferPaths || [];
       const udpProbeResultMap = Object.fromEntries(
         udpProbeResults.map((item) => [item.targetPeerId || "", item])
+      );
+      const peerTransferPathMap = Object.fromEntries(
+        peerTransferPaths.map((item) => [item.targetPeerId || "", item])
       );
       const swarmHTML = swarms.length
         ? swarms.map((swarm) =>
@@ -754,7 +762,7 @@ const webAppHTML = `<!doctype html>
             '<strong>' + escapeHTML(shortContentId(swarm.contentId)) + '</strong><br>' +
             swarm.peerCount + ' peers' +
             '<div class="subsection">' +
-              renderSwarmPeers(swarm.peers || [], udpProbeResultMap) +
+              renderSwarmPeers(swarm.peers || [], udpProbeResultMap, peerTransferPathMap) +
             '</div>' +
           '</div>'
         ).join("")
@@ -801,7 +809,7 @@ const webAppHTML = `<!doctype html>
         '<div class="metric-row">' +
           '<div class="metric"><strong>' + status.cleanupIntervalSeconds + 's</strong><span>cleanup interval</span></div>' +
           '<div class="metric"><strong>' + escapeHTML(status.statePath || "-") + '</strong><span>state file</span></div>' +
-          '<div class="metric"><strong>' + udpProbeResults.length + '</strong><span>tracked UDP peers</span></div>' +
+          '<div class="metric"><strong>' + peerTransferPaths.length + '</strong><span>tracked transfer peers</span></div>' +
         '</div>' +
         pendingHTML +
         udpResultHTML +
@@ -818,12 +826,14 @@ const webAppHTML = `<!doctype html>
       return peers.map((peer) => escapeHTML(peer.peerId || "peer")).join(", ");
     }
 
-    function renderSwarmPeers(peers, udpProbeResultMap) {
+    function renderSwarmPeers(peers, udpProbeResultMap, peerTransferPathMap) {
       if (!peers.length) return '<div class="empty">No peers</div>';
       return peers.map((peer) => {
         const result = udpProbeResultMap[peer.peerId || ""] || null;
+        const transfer = peerTransferPathMap[peer.peerId || ""] || null;
         return '<div class="swarm">' +
           '<strong>' + escapeHTML(peer.peerId || "peer") + '</strong> ' + formatProbeResultChip(result) + ' ' + formatRouteChip(peer, result) + '<br>' +
+          'actual ' + formatActualPathChip(transfer) + pathTotalsSuffix(transfer) +
           'udp ' + escapeHTML((peer.udpAddrs || []).join(",") || "-") +
           '<br>observed ' + escapeHTML(peer.observedUdpAddr || "-") +
           '<br>have ' + escapeHTML(formatHaveRanges(peer.haveRanges || [])) +
@@ -858,6 +868,26 @@ const webAppHTML = `<!doctype html>
     function formatRouteChip(peer, result) {
       const advice = peerRouteAdvice(peer, result);
       return '<span class="chip ' + advice.className + '">' + escapeHTML(advice.label) + '</span>';
+    }
+
+    function formatActualPathChip(item) {
+      if (!item || !item.lastPath) {
+        return '<span class="chip chip-idle">unknown</span>';
+      }
+      if (item.lastPath === "udp") {
+        return '<span class="chip chip-route-udp">recent udp</span>';
+      }
+      if (item.lastPath === "tcp") {
+        return '<span class="chip chip-route-tcp">recent tcp</span>';
+      }
+      return '<span class="chip chip-idle">' + escapeHTML(item.lastPath) + '</span>';
+    }
+
+    function pathTotalsSuffix(item) {
+      if (!item) {
+        return '<br>';
+      }
+      return ' <span class="meta-inline">udp ' + Number(item.udpCount || 0) + ' / tcp ' + Number(item.tcpCount || 0) + ' / last ' + escapeHTML(formatTimestamp(item.lastAt)) + '</span><br>';
     }
 
     function peerRouteAdvice(peer, result) {

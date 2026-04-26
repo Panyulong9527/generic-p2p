@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"generic-p2p/internal/logging"
 	p2pnet "generic-p2p/internal/net"
 	"generic-p2p/internal/scheduler"
+	"generic-p2p/internal/tracker"
 )
 
 type downloadPieceState struct {
@@ -180,6 +182,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 				"error", err.Error(),
 			)
 		}
+		reportTrackerTransferPath(logger, discovery, manifest.ContentID, usedCandidate)
 		if runtime := store.RuntimeStats(); runtime != nil {
 			_ = runtime.RecordDownload(int64(len(data)), transferPathForPeer(usedCandidate.PeerID), usedCandidate.PeerID)
 		}
@@ -247,6 +250,26 @@ func pieceAttemptCandidates(pieceIndex int, selected scheduler.PeerCandidate, pe
 		alternatives = alternatives[:2]
 	}
 	return append(attempts, alternatives...)
+}
+
+func reportTrackerTransferPath(logger *logging.Logger, discovery peerDiscoveryOptions, contentID string, candidate scheduler.PeerCandidate) {
+	if strings.TrimSpace(discovery.trackerURL) == "" || strings.TrimSpace(candidate.PeerID) == "" {
+		return
+	}
+	transport := strings.ToLower(strings.TrimSpace(candidate.Transport))
+	if transport != "udp" && transport != "tcp" {
+		return
+	}
+	client := tracker.NewClient(discovery.trackerURL)
+	if err := client.ReportTransferPath(context.Background(), candidate.PeerID, contentID, transport); err != nil {
+		logger.Error("tracker_transfer_report_failed",
+			"contentId", contentID,
+			"peer", candidate.PeerID,
+			"transport", transport,
+			"tracker", discovery.trackerURL,
+			"error", err.Error(),
+		)
+	}
 }
 
 func reserveNextPiece(manifest *core.ContentManifest, store *core.PieceStore, state *downloadPieceState, peerCandidates []scheduler.PeerCandidate) (int, bool) {
