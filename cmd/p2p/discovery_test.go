@@ -176,3 +176,42 @@ func TestTrackerTransferPathBiasDecaysAndIgnoresOtherContent(t *testing.T) {
 		t.Fatalf("expected peer-b older udp miss bias -0.10, got %.2f", got)
 	}
 }
+
+func TestBuildTrackerUDPPeerBiasesIncludesKeepaliveBias(t *testing.T) {
+	now := time.Unix(600, 0)
+	status := tracker.StatusResponse{
+		UDPKeepaliveResults: []tracker.UDPKeepaliveStatus{
+			{
+				TargetPeerID:  "udp://198.51.100.1:9003",
+				ContentID:     "sha256-demo",
+				SuccessCount:  2,
+				LastSuccessAt: now.Add(-5 * time.Second).Unix(),
+			},
+			{
+				TargetPeerID:  "udp://198.51.100.2:9003",
+				ContentID:     "sha256-demo",
+				FailureCount:  1,
+				LastFailureAt: now.Add(-8 * time.Second).Unix(),
+				LastErrorKind: "udp_timeout",
+			},
+			{
+				TargetPeerID:  "udp://198.51.100.3:9003",
+				ContentID:     "sha256-other",
+				FailureCount:  1,
+				LastFailureAt: now.Add(-6 * time.Second).Unix(),
+				LastErrorKind: "generic",
+			},
+		},
+	}
+
+	biases := buildTrackerUDPPeerBiases(status, "sha256-demo", now)
+	if got := biases["udp://198.51.100.1:9003"]; math.Abs(got-0.10) > 1e-9 {
+		t.Fatalf("expected keepalive success bias 0.10, got %.2f", got)
+	}
+	if got := biases["udp://198.51.100.2:9003"]; math.Abs(got-(-0.12)) > 1e-9 {
+		t.Fatalf("expected keepalive timeout bias -0.12, got %.2f", got)
+	}
+	if got := biases["udp://198.51.100.3:9003"]; math.Abs(got) > 1e-9 {
+		t.Fatalf("expected other-content keepalive bias ignored, got %.2f", got)
+	}
+}

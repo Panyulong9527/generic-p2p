@@ -457,6 +457,13 @@ func buildTrackerUDPPeerBiases(status tracker.StatusResponse, contentID string, 
 		}
 		transferPaths[path.TargetPeerID] = path
 	}
+	keepaliveResults := make(map[string]tracker.UDPKeepaliveStatus, len(status.UDPKeepaliveResults))
+	for _, item := range status.UDPKeepaliveResults {
+		if strings.TrimSpace(item.ContentID) != "" && item.ContentID != contentID {
+			continue
+		}
+		keepaliveResults[item.TargetPeerID] = item
+	}
 	for _, swarm := range status.Swarms {
 		if swarm.ContentID != contentID {
 			continue
@@ -464,6 +471,9 @@ func buildTrackerUDPPeerBiases(status tracker.StatusResponse, contentID string, 
 		for _, peer := range swarm.Peers {
 			biases[peer.PeerID] += trackerTransferPathBias(peer, probeResults[peer.PeerID], transferPaths[peer.PeerID], now)
 		}
+	}
+	for peerID, result := range keepaliveResults {
+		biases[peerID] += trackerUDPKeepaliveBias(result, now)
 	}
 	return biases
 }
@@ -534,6 +544,40 @@ func trackerTransferPathBias(peer tracker.PeerRecord, probeResult tracker.UDPPro
 		}
 	default:
 		return 0
+	}
+}
+
+func trackerUDPKeepaliveBias(result tracker.UDPKeepaliveStatus, now time.Time) float64 {
+	if result.LastSuccessAt > 0 {
+		age := now.Sub(time.Unix(result.LastSuccessAt, 0))
+		switch {
+		case age <= 10*time.Second:
+			return 0.10
+		case age <= 30*time.Second:
+			return 0.06
+		}
+	}
+	if result.LastFailureAt > 0 {
+		age := now.Sub(time.Unix(result.LastFailureAt, 0))
+		penalty := trackerUDPKeepaliveFailurePenalty(result.LastErrorKind)
+		switch {
+		case age <= 10*time.Second:
+			return penalty
+		case age <= 30*time.Second:
+			return penalty * 0.6
+		}
+	}
+	return 0
+}
+
+func trackerUDPKeepaliveFailurePenalty(errorKind string) float64 {
+	switch strings.TrimSpace(errorKind) {
+	case peerFailureKindUDPTimeout:
+		return -0.12
+	case "", peerFailureKindGeneric:
+		return -0.18
+	default:
+		return -0.18
 	}
 }
 
