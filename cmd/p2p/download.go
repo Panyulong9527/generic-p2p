@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -124,32 +125,47 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
-
-		peerLoad.Acquire(selected.PeerID)
-		if runtime := store.RuntimeStats(); runtime != nil {
-			_ = runtime.StartDownload(pieceIndex, selected.PeerID, workerID, time.Now())
+		attemptCandidates := pieceAttemptCandidates(pieceIndex, selected, peerCandidates)
+		var data []byte
+		var usedCandidate scheduler.PeerCandidate
+		var lastErr error
+		for burstIndex, candidate := range attemptCandidates {
+			peerLoad.Acquire(candidate.PeerID)
+			if runtime := store.RuntimeStats(); runtime != nil {
+				_ = runtime.StartDownload(pieceIndex, candidate.PeerID, workerID, time.Now())
+			}
+			peerUsage.RecordAssignment(candidate.PeerID)
+			data, lastErr = fetchPieceFromCandidate(candidate, manifest.ContentID, pieceIndex)
+			peerLoad.Release(candidate.PeerID)
+			if runtime := store.RuntimeStats(); runtime != nil {
+				_ = runtime.FinishDownload(pieceIndex)
+			}
+			if lastErr != nil {
+				cooldown := peerHealth.MarkFailure(candidate.PeerID, time.Now())
+				logger.Error("piece_download_failed",
+					"contentId", manifest.ContentID,
+					"pieceIndex", pieceIndex,
+					"peer", candidate.PeerID,
+					"attempt", attempt+1,
+					"burstTry", burstIndex+1,
+					"burstPeers", len(attemptCandidates),
+					"cooldownMs", cooldown.Milliseconds(),
+					"error", lastErr.Error(),
+				)
+				excluded[candidate.PeerID] = true
+				if burstIndex+1 < len(attemptCandidates) {
+					time.Sleep(60 * time.Millisecond)
+				}
+				continue
+			}
+			usedCandidate = candidate
+			peerHealth.MarkSuccess(candidate.PeerID)
+			break
 		}
-		peerUsage.RecordAssignment(selected.PeerID)
-		data, err := fetchPieceFromCandidate(selected, manifest.ContentID, pieceIndex)
-		peerLoad.Release(selected.PeerID)
-		if runtime := store.RuntimeStats(); runtime != nil {
-			_ = runtime.FinishDownload(pieceIndex)
-		}
-		if err != nil {
-			cooldown := peerHealth.MarkFailure(selected.PeerID, time.Now())
-			logger.Error("piece_download_failed",
-				"contentId", manifest.ContentID,
-				"pieceIndex", pieceIndex,
-				"peer", selected.PeerID,
-				"attempt", attempt+1,
-				"cooldownMs", cooldown.Milliseconds(),
-				"error", err.Error(),
-			)
-			excluded[selected.PeerID] = true
+		if lastErr != nil && usedCandidate.PeerID == "" {
 			time.Sleep(150 * time.Millisecond)
 			continue
 		}
-		peerHealth.MarkSuccess(selected.PeerID)
 		if err := store.PutPiece(pieceIndex, data); err != nil {
 			return fmt.Errorf("store piece %d: %w", pieceIndex, err)
 		}
@@ -162,13 +178,13 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 			)
 		}
 		if runtime := store.RuntimeStats(); runtime != nil {
-			_ = runtime.RecordDownload(int64(len(data)), transferPathForPeer(selected.PeerID), selected.PeerID)
+			_ = runtime.RecordDownload(int64(len(data)), transferPathForPeer(usedCandidate.PeerID), usedCandidate.PeerID)
 		}
 		logger.Info("piece_downloaded",
 			"contentId", manifest.ContentID,
 			"pieceIndex", pieceIndex,
 			"bytes", len(data),
-			"peer", selected.PeerID,
+			"peer", usedCandidate.PeerID,
 		)
 		return nil
 	}
@@ -187,6 +203,37 @@ func fetchPieceFromCandidate(candidate scheduler.PeerCandidate, contentID string
 		}
 		return p2pnet.NewClient(addr, 10*time.Second).FetchPiece(contentID, pieceIndex)
 	}
+}
+
+func pieceAttemptCandidates(pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) []scheduler.PeerCandidate {
+	if selected.Transport != "udp" {
+		return []scheduler.PeerCandidate{selected}
+	}
+
+	attempts := []scheduler.PeerCandidate{selected}
+	alternatives := make([]scheduler.PeerCandidate, 0, len(peerCandidates))
+	for _, candidate := range peerCandidates {
+		if candidate.PeerID == selected.PeerID || candidate.Transport != "udp" {
+			continue
+		}
+		if !core.ContainsPiece(candidate.HaveRanges, pieceIndex) {
+			continue
+		}
+		alternatives = append(alternatives, candidate)
+	}
+	sort.Slice(alternatives, func(i, j int) bool {
+		if alternatives[i].Score != alternatives[j].Score {
+			return alternatives[i].Score > alternatives[j].Score
+		}
+		if alternatives[i].PendingCount != alternatives[j].PendingCount {
+			return alternatives[i].PendingCount < alternatives[j].PendingCount
+		}
+		return alternatives[i].PeerID < alternatives[j].PeerID
+	})
+	if len(alternatives) > 2 {
+		alternatives = alternatives[:2]
+	}
+	return append(attempts, alternatives...)
 }
 
 func reserveNextPiece(manifest *core.ContentManifest, store *core.PieceStore, state *downloadPieceState, peerCandidates []scheduler.PeerCandidate) (int, bool) {
