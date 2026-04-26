@@ -103,6 +103,16 @@ type observedUDPPeer struct {
 	SeenAt time.Time
 }
 
+type udpPendingRequest struct {
+	ch chan UDPMessage
+}
+
+type udpSharedSocket struct {
+	conn *net.UDPConn
+	mu   sync.Mutex
+	wait map[string]udpPendingRequest
+}
+
 var udpObservedPeers = struct {
 	mu      sync.Mutex
 	entries map[string]observedUDPPeer
@@ -110,10 +120,18 @@ var udpObservedPeers = struct {
 	entries: make(map[string]observedUDPPeer),
 }
 
+var udpSharedSockets = struct {
+	mu      sync.Mutex
+	entries map[string]*udpSharedSocket
+}{
+	entries: make(map[string]*udpSharedSocket),
+}
+
 type UDPServer struct {
 	ListenAddr    string
 	Source        ContentSource
 	OnPieceServed func(bytes int64, path string, peerID string)
+	socket        *udpSharedSocket
 }
 
 func NewUDPServer(listenAddr string, source ContentSource) *UDPServer {
@@ -134,6 +152,14 @@ func (s *UDPServer) Listen(ctx context.Context) error {
 	}
 	defer conn.Close()
 
+	socket := newUDPSharedSocket(conn)
+	s.socket = socket
+	registerUDPSharedSocket(s.ListenAddr, socket)
+	defer unregisterUDPSharedSocket(s.ListenAddr, socket)
+	defer func() {
+		s.socket = nil
+	}()
+
 	go func() {
 		<-ctx.Done()
 		_ = conn.Close()
@@ -151,13 +177,16 @@ func (s *UDPServer) Listen(ctx context.Context) error {
 			}
 		}
 		payload := append([]byte(nil), buffer[:n]...)
-		go s.handleDatagram(conn, remote, payload)
+		go s.handleDatagram(socket, remote, payload)
 	}
 }
 
-func (s *UDPServer) handleDatagram(conn *net.UDPConn, remote *net.UDPAddr, payload []byte) {
+func (s *UDPServer) handleDatagram(socket *udpSharedSocket, remote *net.UDPAddr, payload []byte) {
 	var message UDPMessage
 	if err := json.Unmarshal(payload, &message); err != nil {
+		return
+	}
+	if socket.deliver(message) {
 		return
 	}
 
@@ -165,25 +194,25 @@ func (s *UDPServer) handleDatagram(conn *net.UDPConn, remote *net.UDPAddr, paylo
 	case UDPMessageTypePing:
 		req, err := decodeUDPBody[UDPPing](message)
 		if err != nil {
-			_ = writeUDPError(conn, remote, "", err)
+			_ = writeUDPError(socket.conn, remote, "", err)
 			return
 		}
 		if req.PeerID != "" && req.ContentID != "" {
 			RememberObservedUDPPeer(req.ContentID, req.PeerID, remote.String(), time.Now())
 		}
-		_ = writeUDPMessage(conn, remote, UDPMessageTypePong, UDPPong{RequestID: req.RequestID})
+		_ = writeUDPMessage(socket.conn, remote, UDPMessageTypePong, UDPPong{RequestID: req.RequestID})
 	case UDPMessageTypeHaveRequest:
 		req, err := decodeUDPBody[UDPHaveRequest](message)
 		if err != nil {
-			_ = writeUDPError(conn, remote, "", err)
+			_ = writeUDPError(socket.conn, remote, "", err)
 			return
 		}
 		ranges, err := s.Source.HaveRanges(req.ContentID)
 		if err != nil {
-			_ = writeUDPError(conn, remote, req.RequestID, err)
+			_ = writeUDPError(socket.conn, remote, req.RequestID, err)
 			return
 		}
-		_ = writeUDPMessage(conn, remote, UDPMessageTypeHaveResponse, UDPHaveResponse{
+		_ = writeUDPMessage(socket.conn, remote, UDPMessageTypeHaveResponse, UDPHaveResponse{
 			RequestID:  req.RequestID,
 			ContentID:  req.ContentID,
 			HaveRanges: ranges,
@@ -191,12 +220,12 @@ func (s *UDPServer) handleDatagram(conn *net.UDPConn, remote *net.UDPAddr, paylo
 	case UDPMessageTypePieceRequest:
 		req, err := decodeUDPBody[UDPPieceRequest](message)
 		if err != nil {
-			_ = writeUDPError(conn, remote, "", err)
+			_ = writeUDPError(socket.conn, remote, "", err)
 			return
 		}
 		data, err := s.Source.Piece(req.ContentID, req.PieceIndex)
 		if err != nil {
-			_ = writeUDPError(conn, remote, req.RequestID, err)
+			_ = writeUDPError(socket.conn, remote, req.RequestID, err)
 			return
 		}
 		totalChunks := (len(data) + udpChunkDataBytes - 1) / udpChunkDataBytes
@@ -206,7 +235,7 @@ func (s *UDPServer) handleDatagram(conn *net.UDPConn, remote *net.UDPAddr, paylo
 			if end > len(data) {
 				end = len(data)
 			}
-			if err := writeUDPMessage(conn, remote, UDPMessageTypePieceChunk, UDPPieceChunk{
+			if err := writeUDPMessage(socket.conn, remote, UDPMessageTypePieceChunk, UDPPieceChunk{
 				RequestID:   req.RequestID,
 				ContentID:   req.ContentID,
 				PieceIndex:  req.PieceIndex,
@@ -224,8 +253,9 @@ func (s *UDPServer) handleDatagram(conn *net.UDPConn, remote *net.UDPAddr, paylo
 }
 
 type UDPClient struct {
-	Addr    string
-	Timeout time.Duration
+	Addr      string
+	LocalAddr string
+	Timeout   time.Duration
 }
 
 func NewUDPClient(addr string, timeout time.Duration) *UDPClient {
@@ -233,6 +263,15 @@ func NewUDPClient(addr string, timeout time.Duration) *UDPClient {
 		Addr:    addr,
 		Timeout: timeout,
 	}
+}
+
+func (c *UDPClient) WithLocalAddr(localAddr string) *UDPClient {
+	if c == nil {
+		return nil
+	}
+	clone := *c
+	clone.LocalAddr = localAddr
+	return &clone
 }
 
 func (c *UDPClient) Probe() error {
@@ -251,6 +290,9 @@ func (c *UDPClient) probe(contentID string, peerID string) error {
 	conn, remote, err := c.open()
 	if err != nil {
 		return err
+	}
+	if conn == nil {
+		return c.probeWithSharedSocket(remote, requestID, contentID, peerID)
 	}
 	defer conn.Close()
 
@@ -295,6 +337,48 @@ func (c *UDPClient) probe(contentID string, peerID string) error {
 		}
 		if body.RequestID == requestID {
 			return nil
+		}
+	}
+}
+
+func (c *UDPClient) probeWithSharedSocket(remote *net.UDPAddr, requestID string, contentID string, peerID string) error {
+	socket, ok := lookupUDPSharedSocket(c.LocalAddr)
+	if !ok {
+		return fmt.Errorf("shared udp socket unavailable for %s", c.LocalAddr)
+	}
+	msgCh, release := socket.register(requestID)
+	defer release()
+	if err := writeUDPMessage(socket.conn, remote, UDPMessageTypePing, UDPPing{
+		RequestID: requestID,
+		PeerID:    peerID,
+		ContentID: contentID,
+	}); err != nil {
+		return err
+	}
+	deadline := time.NewTimer(c.Timeout)
+	defer deadline.Stop()
+	for {
+		select {
+		case <-deadline.C:
+			return &UDPTimeoutError{Op: "probe", Addr: c.Addr, Err: errors.New("probe deadline exceeded")}
+		case message := <-msgCh:
+			if message.Type == UDPMessageTypeError {
+				body, err := decodeUDPBody[UDPError](message)
+				if err != nil {
+					return err
+				}
+				return errors.New(body.Message)
+			}
+			if message.Type != UDPMessageTypePong {
+				continue
+			}
+			body, err := decodeUDPBody[UDPPong](message)
+			if err != nil {
+				return err
+			}
+			if body.RequestID == requestID {
+				return nil
+			}
 		}
 	}
 }
@@ -362,6 +446,9 @@ func (c *UDPClient) FetchHave(contentID string) ([]core.HaveRange, error) {
 	if err != nil {
 		return nil, err
 	}
+	if conn == nil {
+		return c.fetchHaveWithSharedSocket(remote, requestID, contentID)
+	}
 	defer conn.Close()
 
 	if err := writeUDPMessage(conn, remote, UDPMessageTypeHaveRequest, UDPHaveRequest{
@@ -409,6 +496,47 @@ func (c *UDPClient) FetchHave(contentID string) ([]core.HaveRange, error) {
 	}
 }
 
+func (c *UDPClient) fetchHaveWithSharedSocket(remote *net.UDPAddr, requestID string, contentID string) ([]core.HaveRange, error) {
+	socket, ok := lookupUDPSharedSocket(c.LocalAddr)
+	if !ok {
+		return nil, fmt.Errorf("shared udp socket unavailable for %s", c.LocalAddr)
+	}
+	msgCh, release := socket.register(requestID)
+	defer release()
+	if err := writeUDPMessage(socket.conn, remote, UDPMessageTypeHaveRequest, UDPHaveRequest{
+		RequestID: requestID,
+		ContentID: contentID,
+	}); err != nil {
+		return nil, err
+	}
+	deadline := time.NewTimer(c.Timeout)
+	defer deadline.Stop()
+	for {
+		select {
+		case <-deadline.C:
+			return nil, &UDPTimeoutError{Op: "fetch-have", Addr: c.Addr, Err: errors.New("have deadline exceeded")}
+		case message := <-msgCh:
+			if message.Type == UDPMessageTypeError {
+				body, err := decodeUDPBody[UDPError](message)
+				if err != nil {
+					return nil, err
+				}
+				return nil, errors.New(body.Message)
+			}
+			if message.Type != UDPMessageTypeHaveResponse {
+				continue
+			}
+			body, err := decodeUDPBody[UDPHaveResponse](message)
+			if err != nil {
+				return nil, err
+			}
+			if body.RequestID == requestID {
+				return body.HaveRanges, nil
+			}
+		}
+	}
+}
+
 func (c *UDPClient) FetchPiece(contentID string, pieceIndex int) ([]byte, error) {
 	requestID, err := newUDPRequestID()
 	if err != nil {
@@ -417,6 +545,9 @@ func (c *UDPClient) FetchPiece(contentID string, pieceIndex int) ([]byte, error)
 	conn, remote, err := c.open()
 	if err != nil {
 		return nil, err
+	}
+	if conn == nil {
+		return c.fetchPieceWithSharedSocket(remote, requestID, contentID, pieceIndex)
 	}
 	defer conn.Close()
 
@@ -493,11 +624,182 @@ func (c *UDPClient) open() (*net.UDPConn, *net.UDPAddr, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	conn, err := net.ListenUDP("udp", nil)
+	if c.LocalAddr != "" {
+		if _, ok := lookupUDPSharedSocket(c.LocalAddr); ok {
+			return nil, remote, nil
+		}
+	}
+	var local *net.UDPAddr
+	if c.LocalAddr != "" {
+		local, err = net.ResolveUDPAddr("udp", c.LocalAddr)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	conn, err := net.ListenUDP("udp", local)
 	if err != nil {
 		return nil, nil, err
 	}
 	return conn, remote, nil
+}
+
+func (c *UDPClient) fetchPieceWithSharedSocket(remote *net.UDPAddr, requestID string, contentID string, pieceIndex int) ([]byte, error) {
+	socket, ok := lookupUDPSharedSocket(c.LocalAddr)
+	if !ok {
+		return nil, fmt.Errorf("shared udp socket unavailable for %s", c.LocalAddr)
+	}
+	msgCh, release := socket.register(requestID)
+	defer release()
+	if err := writeUDPMessage(socket.conn, remote, UDPMessageTypePieceRequest, UDPPieceRequest{
+		RequestID:  requestID,
+		ContentID:  contentID,
+		PieceIndex: pieceIndex,
+	}); err != nil {
+		return nil, err
+	}
+	chunks := make(map[int][]byte)
+	totalChunks := -1
+	deadline := time.NewTimer(c.Timeout)
+	defer deadline.Stop()
+	for {
+		if totalChunks >= 0 && len(chunks) == totalChunks {
+			return joinUDPChunks(chunks, totalChunks), nil
+		}
+		select {
+		case <-deadline.C:
+			return nil, &UDPTimeoutError{
+				Op:   fmt.Sprintf("fetch-piece-%d", pieceIndex),
+				Addr: c.Addr,
+				Err:  errors.New("piece deadline exceeded"),
+			}
+		case message := <-msgCh:
+			if message.Type == UDPMessageTypeError {
+				body, err := decodeUDPBody[UDPError](message)
+				if err != nil {
+					return nil, err
+				}
+				return nil, errors.New(body.Message)
+			}
+			if message.Type != UDPMessageTypePieceChunk {
+				continue
+			}
+			chunk, err := decodeUDPBody[UDPPieceChunk](message)
+			if err != nil {
+				return nil, err
+			}
+			if chunk.RequestID != requestID || chunk.ContentID != contentID || chunk.PieceIndex != pieceIndex {
+				continue
+			}
+			if chunk.TotalChunks <= 0 || chunk.ChunkIndex < 0 || chunk.ChunkIndex >= chunk.TotalChunks {
+				continue
+			}
+			if totalChunks == -1 {
+				totalChunks = chunk.TotalChunks
+			}
+			if chunk.TotalChunks != totalChunks {
+				continue
+			}
+			chunks[chunk.ChunkIndex] = chunk.Data
+		}
+	}
+}
+
+func newUDPSharedSocket(conn *net.UDPConn) *udpSharedSocket {
+	return &udpSharedSocket{
+		conn: conn,
+		wait: make(map[string]udpPendingRequest),
+	}
+}
+
+func (s *udpSharedSocket) register(requestID string) (<-chan UDPMessage, func()) {
+	ch := make(chan UDPMessage, 32)
+	s.mu.Lock()
+	s.wait[requestID] = udpPendingRequest{ch: ch}
+	s.mu.Unlock()
+	return ch, func() {
+		s.mu.Lock()
+		delete(s.wait, requestID)
+		s.mu.Unlock()
+	}
+}
+
+func (s *udpSharedSocket) deliver(message UDPMessage) bool {
+	requestID := udpMessageRequestID(message)
+	if requestID == "" {
+		return false
+	}
+	s.mu.Lock()
+	pending, ok := s.wait[requestID]
+	s.mu.Unlock()
+	if !ok {
+		return false
+	}
+	select {
+	case pending.ch <- message:
+	default:
+	}
+	return true
+}
+
+func udpMessageRequestID(message UDPMessage) string {
+	switch message.Type {
+	case UDPMessageTypePong:
+		body, err := decodeUDPBody[UDPPong](message)
+		if err != nil {
+			return ""
+		}
+		return body.RequestID
+	case UDPMessageTypeHaveResponse:
+		body, err := decodeUDPBody[UDPHaveResponse](message)
+		if err != nil {
+			return ""
+		}
+		return body.RequestID
+	case UDPMessageTypePieceChunk:
+		body, err := decodeUDPBody[UDPPieceChunk](message)
+		if err != nil {
+			return ""
+		}
+		return body.RequestID
+	case UDPMessageTypeError:
+		body, err := decodeUDPBody[UDPError](message)
+		if err != nil {
+			return ""
+		}
+		return body.RequestID
+	default:
+		return ""
+	}
+}
+
+func registerUDPSharedSocket(listenAddr string, socket *udpSharedSocket) {
+	if listenAddr == "" || socket == nil {
+		return
+	}
+	udpSharedSockets.mu.Lock()
+	defer udpSharedSockets.mu.Unlock()
+	udpSharedSockets.entries[listenAddr] = socket
+}
+
+func unregisterUDPSharedSocket(listenAddr string, socket *udpSharedSocket) {
+	if listenAddr == "" || socket == nil {
+		return
+	}
+	udpSharedSockets.mu.Lock()
+	defer udpSharedSockets.mu.Unlock()
+	if udpSharedSockets.entries[listenAddr] == socket {
+		delete(udpSharedSockets.entries, listenAddr)
+	}
+}
+
+func lookupUDPSharedSocket(listenAddr string) (*udpSharedSocket, bool) {
+	if listenAddr == "" {
+		return nil, false
+	}
+	udpSharedSockets.mu.Lock()
+	defer udpSharedSockets.mu.Unlock()
+	socket, ok := udpSharedSockets.entries[listenAddr]
+	return socket, ok
 }
 
 func writeUDPMessage(conn *net.UDPConn, remote *net.UDPAddr, messageType string, body any) error {

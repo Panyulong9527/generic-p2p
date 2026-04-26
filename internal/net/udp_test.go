@@ -68,6 +68,62 @@ func TestUDPClientFetchHaveAndPiece(t *testing.T) {
 	}
 }
 
+func TestUDPClientCanReuseServerListenSocket(t *testing.T) {
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "reuse.txt")
+	if err := os.WriteFile(sourcePath, []byte("reuse udp socket"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := core.BuildManifestFromFile(sourcePath, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	addr := freeUDPAddr(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server := NewUDPServer(addr, StaticContentSource{
+		ManifestFile: manifest,
+		FilePath:     sourcePath,
+	})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Listen(ctx)
+	}()
+	waitForUDPServer(t, addr, manifest.ContentID)
+
+	client := NewUDPClient(addr, time.Second).WithLocalAddr(addr)
+	if err := client.Probe(); err != nil {
+		t.Fatal(err)
+	}
+	haveRanges, err := client.FetchHave(manifest.ContentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !core.ContainsPiece(haveRanges, 1) {
+		t.Fatalf("expected have ranges to include piece 1: %#v", haveRanges)
+	}
+	piece, err := client.FetchPiece(manifest.ContentID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(piece) != " udp " {
+		t.Fatalf("unexpected piece data: %q", string(piece))
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("udp server did not stop")
+	}
+}
+
 func TestUDPClientProbeFailsWhenPeerUnavailable(t *testing.T) {
 	addr := freeUDPAddr(t)
 	client := NewUDPClient(addr, 50*time.Millisecond)

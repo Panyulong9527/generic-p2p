@@ -190,7 +190,7 @@ func collectDynamicPeerCandidates(logger *logging.Logger, options peerDiscoveryO
 		}
 	}
 
-	freshCandidates, err := collectPeerCandidates(logger, options.contentID, peerAddrs, udpPeerAddrs, udpPreferences, peerHealth, udpProbes)
+	freshCandidates, err := collectPeerCandidates(logger, options.contentID, peerAddrs, udpPeerAddrs, options.selfUDPListenAddr, udpPreferences, peerHealth, udpProbes)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +201,7 @@ func collectDynamicPeerCandidates(logger *logging.Logger, options peerDiscoveryO
 	return filterPeerCandidates(logger, options.contentID, candidates, peerHealth, excluded, now, peerLoad, peerUsage)
 }
 
-func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs []string, udpPeerAddrs []string, udpPreferences map[string]udpPeerPreference, peerHealth *peerHealthState, udpProbes *udpProbeCache) ([]scheduler.PeerCandidate, error) {
+func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs []string, udpPeerAddrs []string, selfUDPListenAddr string, udpPreferences map[string]udpPeerPreference, peerHealth *peerHealthState, udpProbes *udpProbeCache) ([]scheduler.PeerCandidate, error) {
 	candidates := make([]scheduler.PeerCandidate, 0, len(peerAddrs)+len(udpPeerAddrs))
 	for _, addr := range peerAddrs {
 		client := p2pnet.NewClient(addr, 10*time.Second)
@@ -234,7 +234,7 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 	}
 	for _, addr := range udpPeerAddrs {
 		peerID := "udp://" + addr
-		client := p2pnet.NewUDPClient(addr, 3*time.Second)
+		client := p2pnet.NewUDPClient(addr, 3*time.Second).WithLocalAddr(selfUDPListenAddr)
 		now := time.Now()
 		if ok, cached := udpProbes.Load(addr, now); cached {
 			if !ok {
