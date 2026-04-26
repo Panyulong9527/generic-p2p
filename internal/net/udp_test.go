@@ -76,6 +76,44 @@ func TestUDPClientProbeFailsWhenPeerUnavailable(t *testing.T) {
 	}
 }
 
+func TestUDPProbeStoresObservedPeerAddress(t *testing.T) {
+	addr := freeUDPAddr(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server := NewUDPServer(addr, StaticContentSource{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Listen(ctx)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if err := NewUDPClient(addr, 50*time.Millisecond).ProbeForPeer("content-observed", "peer-udp-a"); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	observedAddr, ok := ObservedUDPPeerAddr("content-observed", "peer-udp-a", time.Second, time.Now())
+	if !ok {
+		t.Fatal("expected observed udp peer address to be stored")
+	}
+	if observedAddr == "" {
+		t.Fatal("expected non-empty observed udp peer address")
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("udp server did not stop")
+	}
+}
+
 func freeUDPAddr(t *testing.T) string {
 	t.Helper()
 

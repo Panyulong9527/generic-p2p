@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"sync"
 	"time"
 
 	"generic-p2p/internal/core"
@@ -34,6 +35,8 @@ type UDPMessage struct {
 
 type UDPPing struct {
 	RequestID string `json:"requestId"`
+	PeerID    string `json:"peerId,omitempty"`
+	ContentID string `json:"contentId,omitempty"`
 }
 
 type UDPPong struct {
@@ -69,6 +72,18 @@ type UDPPieceChunk struct {
 type UDPError struct {
 	RequestID string `json:"requestId"`
 	Message   string `json:"message"`
+}
+
+type observedUDPPeer struct {
+	Addr   string
+	SeenAt time.Time
+}
+
+var udpObservedPeers = struct {
+	mu      sync.Mutex
+	entries map[string]observedUDPPeer
+}{
+	entries: make(map[string]observedUDPPeer),
 }
 
 type UDPServer struct {
@@ -128,6 +143,9 @@ func (s *UDPServer) handleDatagram(conn *net.UDPConn, remote *net.UDPAddr, paylo
 		if err != nil {
 			_ = writeUDPError(conn, remote, "", err)
 			return
+		}
+		if req.PeerID != "" && req.ContentID != "" {
+			RememberObservedUDPPeer(req.ContentID, req.PeerID, remote.String(), time.Now())
 		}
 		_ = writeUDPMessage(conn, remote, UDPMessageTypePong, UDPPong{RequestID: req.RequestID})
 	case UDPMessageTypeHaveRequest:
@@ -194,6 +212,14 @@ func NewUDPClient(addr string, timeout time.Duration) *UDPClient {
 }
 
 func (c *UDPClient) Probe() error {
+	return c.probe("", "")
+}
+
+func (c *UDPClient) ProbeForPeer(contentID string, peerID string) error {
+	return c.probe(contentID, peerID)
+}
+
+func (c *UDPClient) probe(contentID string, peerID string) error {
 	requestID, err := newUDPRequestID()
 	if err != nil {
 		return err
@@ -204,7 +230,11 @@ func (c *UDPClient) Probe() error {
 	}
 	defer conn.Close()
 
-	if err := writeUDPMessage(conn, remote, UDPMessageTypePing, UDPPing{RequestID: requestID}); err != nil {
+	if err := writeUDPMessage(conn, remote, UDPMessageTypePing, UDPPing{
+		RequestID: requestID,
+		PeerID:    peerID,
+		ContentID: contentID,
+	}); err != nil {
 		return err
 	}
 
@@ -243,6 +273,40 @@ func (c *UDPClient) Probe() error {
 			return nil
 		}
 	}
+}
+
+func RememberObservedUDPPeer(contentID string, peerID string, addr string, now time.Time) {
+	if contentID == "" || peerID == "" || addr == "" {
+		return
+	}
+
+	udpObservedPeers.mu.Lock()
+	defer udpObservedPeers.mu.Unlock()
+
+	udpObservedPeers.entries[contentID+"|"+peerID] = observedUDPPeer{
+		Addr:   addr,
+		SeenAt: now,
+	}
+}
+
+func ObservedUDPPeerAddr(contentID string, peerID string, maxAge time.Duration, now time.Time) (string, bool) {
+	if contentID == "" || peerID == "" {
+		return "", false
+	}
+
+	udpObservedPeers.mu.Lock()
+	defer udpObservedPeers.mu.Unlock()
+
+	key := contentID + "|" + peerID
+	entry, ok := udpObservedPeers.entries[key]
+	if !ok {
+		return "", false
+	}
+	if maxAge > 0 && now.Sub(entry.SeenAt) > maxAge {
+		delete(udpObservedPeers.entries, key)
+		return "", false
+	}
+	return entry.Addr, true
 }
 
 func (c *UDPClient) FetchHave(contentID string) ([]core.HaveRange, error) {

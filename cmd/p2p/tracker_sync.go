@@ -68,7 +68,7 @@ func pollTrackerUDPProbeRequests(logger *logging.Logger, client *tracker.Client,
 		if targetAddr == "" {
 			continue
 		}
-		if err := p2pnet.NewUDPClient(targetAddr, 2*time.Second).Probe(); err != nil {
+		if err := p2pnet.NewUDPClient(targetAddr, 2*time.Second).ProbeForPeer(request.ContentID, peerID); err != nil {
 			logger.Error("tracker_udp_probe_response_failed",
 				"contentId", request.ContentID,
 				"requesterPeerId", request.RequesterPeerID,

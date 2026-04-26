@@ -65,6 +65,15 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 				)
 			}
 		}
+		if observedAddr, ok := p2pnet.ObservedUDPPeerAddr(contentID, peer.PeerID, 30*time.Second, time.Now()); ok && observedAddr != selfUDPListenAddr {
+			logger.Info("local_observed_udp_peer_discovered",
+				"contentId", contentID,
+				"peerId", peer.PeerID,
+				"listen", observedAddr,
+				"ranges", peer.HaveRanges,
+			)
+			addrs = append(addrs, observedAddr)
+		}
 		for _, addr := range peer.UDPAddrs {
 			if addr == "" || addr == selfUDPListenAddr {
 				continue
