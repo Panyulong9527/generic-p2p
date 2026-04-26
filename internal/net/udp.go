@@ -333,6 +333,26 @@ func ObservedUDPPeerAddr(contentID string, peerID string, maxAge time.Duration, 
 	return entry.Addr, true
 }
 
+func ObservedUDPPeer(contentID string, peerID string, maxAge time.Duration, now time.Time) (string, time.Time, bool) {
+	if contentID == "" || peerID == "" {
+		return "", time.Time{}, false
+	}
+
+	udpObservedPeers.mu.Lock()
+	defer udpObservedPeers.mu.Unlock()
+
+	key := contentID + "|" + peerID
+	entry, ok := udpObservedPeers.entries[key]
+	if !ok {
+		return "", time.Time{}, false
+	}
+	if maxAge > 0 && now.Sub(entry.SeenAt) > maxAge {
+		delete(udpObservedPeers.entries, key)
+		return "", time.Time{}, false
+	}
+	return entry.Addr, entry.SeenAt, true
+}
+
 func (c *UDPClient) FetchHave(contentID string) ([]core.HaveRange, error) {
 	requestID, err := newUDPRequestID()
 	if err != nil {

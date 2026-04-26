@@ -46,7 +46,7 @@ func discoverTrackerPeers(logger *logging.Logger, contentID string, trackerURL s
 	return addrs, nil
 }
 
-func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerURL string, selfPeerID string, selfUDPListenAddr string, udpProbeRequests *udpProbeRequestCache) ([]string, map[string]bool, error) {
+func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerURL string, selfPeerID string, selfUDPListenAddr string, udpProbeRequests *udpProbeRequestCache) ([]string, map[string]time.Time, error) {
 	client := tracker.NewClient(trackerURL)
 	peers, err := client.GetPeers(context.Background(), contentID)
 	if err != nil {
@@ -54,10 +54,11 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 	}
 
 	addrs := make([]string, 0, len(peers))
-	preferred := make(map[string]bool)
+	observedAt := make(map[string]time.Time)
 	for _, peer := range peers {
+		now := time.Now()
 		probeRequestKey := contentID + "|" + selfPeerID + "|" + selfUDPListenAddr + "|" + peer.PeerID
-		if selfPeerID != "" && selfUDPListenAddr != "" && peer.PeerID != "" && peer.PeerID != selfPeerID && udpProbeRequests.ShouldRequest(probeRequestKey, time.Now()) {
+		if selfPeerID != "" && selfUDPListenAddr != "" && peer.PeerID != "" && peer.PeerID != selfPeerID && udpProbeRequests.ShouldRequest(probeRequestKey, now) {
 			if err := client.RequestUDPProbe(context.Background(), contentID, selfPeerID, selfUDPListenAddr, peer.PeerID); err != nil {
 				logger.Error("tracker_udp_probe_request_failed",
 					"contentId", contentID,
@@ -66,7 +67,7 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 				)
 			}
 		}
-		if observedAddr, ok := p2pnet.ObservedUDPPeerAddr(contentID, peer.PeerID, 30*time.Second, time.Now()); ok && observedAddr != selfUDPListenAddr {
+		if observedAddr, seenAt, ok := p2pnet.ObservedUDPPeer(contentID, peer.PeerID, 30*time.Second, now); ok && observedAddr != selfUDPListenAddr {
 			logger.Info("local_observed_udp_peer_discovered",
 				"contentId", contentID,
 				"peerId", peer.PeerID,
@@ -74,7 +75,7 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 				"ranges", peer.HaveRanges,
 			)
 			addrs = append(addrs, observedAddr)
-			preferred[observedAddr] = true
+			observedAt[observedAddr] = seenAt
 		}
 		for _, addr := range peer.UDPAddrs {
 			if addr == "" || addr == selfUDPListenAddr {
@@ -98,7 +99,7 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 			addrs = append(addrs, peer.ObservedUDPAddr)
 		}
 	}
-	return addrs, preferred, nil
+	return addrs, observedAt, nil
 }
 
 func collectPeerAddrs(peerAddr string, peerList string) []string {
@@ -162,19 +163,19 @@ func collectDynamicPeerCandidates(logger *logging.Logger, options peerDiscoveryO
 		peerAddrs = appendUnique(peerAddrs, discoveredAddrs...)
 	}
 	udpPeerAddrs := collectPeerAddrs(options.explicitUDPPeer, options.explicitUDPPeers)
-	preferredUDPAddrs := make(map[string]bool)
+	observedUDPAddrs := make(map[string]time.Time)
 	if options.trackerURL != "" {
-		discoveredUDPAddrs, observedUDPAddrs, err := discoverTrackerUDPPeers(logger, options.contentID, options.trackerURL, options.selfListenAddr, options.selfUDPListenAddr, udpProbeRequests)
+		discoveredUDPAddrs, observedTimes, err := discoverTrackerUDPPeers(logger, options.contentID, options.trackerURL, options.selfListenAddr, options.selfUDPListenAddr, udpProbeRequests)
 		if err != nil {
 			return nil, err
 		}
 		udpPeerAddrs = appendUnique(udpPeerAddrs, discoveredUDPAddrs...)
-		for addr := range observedUDPAddrs {
-			preferredUDPAddrs[addr] = true
+		for addr, seenAt := range observedTimes {
+			observedUDPAddrs[addr] = seenAt
 		}
 	}
 
-	freshCandidates, err := collectPeerCandidates(logger, options.contentID, peerAddrs, udpPeerAddrs, preferredUDPAddrs, peerHealth, udpProbes)
+	freshCandidates, err := collectPeerCandidates(logger, options.contentID, peerAddrs, udpPeerAddrs, observedUDPAddrs, peerHealth, udpProbes)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +186,7 @@ func collectDynamicPeerCandidates(logger *logging.Logger, options peerDiscoveryO
 	return filterPeerCandidates(logger, options.contentID, candidates, peerHealth, excluded, now, peerLoad, peerUsage)
 }
 
-func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs []string, udpPeerAddrs []string, preferredUDPAddrs map[string]bool, peerHealth *peerHealthState, udpProbes *udpProbeCache) ([]scheduler.PeerCandidate, error) {
+func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs []string, udpPeerAddrs []string, observedUDPAddrs map[string]time.Time, peerHealth *peerHealthState, udpProbes *udpProbeCache) ([]scheduler.PeerCandidate, error) {
 	candidates := make([]scheduler.PeerCandidate, 0, len(peerAddrs)+len(udpPeerAddrs))
 	for _, addr := range peerAddrs {
 		client := p2pnet.NewClient(addr, 10*time.Second)
@@ -269,7 +270,7 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 			Addr:       addr,
 			Transport:  "udp",
 			IsLAN:      isLANAddr(addr),
-			Score:      udpCandidateScore(addr, preferredUDPAddrs),
+			Score:      udpCandidateScore(addr, observedUDPAddrs, time.Now()),
 			HaveRanges: haveRanges,
 		})
 	}
@@ -289,11 +290,22 @@ func udpDiscoveryErrorKind(err error) string {
 	return "generic"
 }
 
-func udpCandidateScore(addr string, preferredUDPAddrs map[string]bool) float64 {
-	if preferredUDPAddrs[addr] {
-		return 1.6
+func udpCandidateScore(addr string, observedUDPAddrs map[string]time.Time, now time.Time) float64 {
+	seenAt, ok := observedUDPAddrs[addr]
+	if !ok {
+		return 1.2
 	}
-	return 1.2
+	age := now.Sub(seenAt)
+	switch {
+	case age <= 5*time.Second:
+		return 1.8
+	case age <= 15*time.Second:
+		return 1.6
+	case age <= 30*time.Second:
+		return 1.4
+	default:
+		return 1.2
+	}
 }
 
 func filterPeerCandidates(logger *logging.Logger, contentID string, candidates []scheduler.PeerCandidate, peerHealth *peerHealthState, excluded map[string]bool, now time.Time, peerLoad *peerLoadState, peerUsage *peerUsageState) ([]scheduler.PeerCandidate, error) {
