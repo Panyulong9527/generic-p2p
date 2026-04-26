@@ -130,6 +130,20 @@ func TestTrackerCoordinatesUDPProbeRequests(t *testing.T) {
 	if len(requests) != 0 {
 		t.Fatalf("expected probe requests to be consumed, got %#v", requests)
 	}
+
+	if err := client.ReportUDPProbeResult(ctx, "peer-a", "peer-b", "sha256-demo", false, "udp_timeout"); err != nil {
+		t.Fatal(err)
+	}
+	status, err := client.GetStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.RecentUDPProbeFailures != 1 {
+		t.Fatalf("unexpected recent udp probe failures: %d", status.RecentUDPProbeFailures)
+	}
+	if len(status.UDPProbeResults) != 1 || status.UDPProbeResults[0].LastErrorKind != "udp_timeout" {
+		t.Fatalf("unexpected udp probe results: %#v", status.UDPProbeResults)
+	}
 }
 
 func TestTrackerPrunesExpiredPeers(t *testing.T) {
@@ -238,6 +252,19 @@ func TestTrackerStatusIncludesSwarmDetails(t *testing.T) {
 	}
 	if len(status.PendingUDPProbes) != 1 || status.PendingUDPProbes[0].TargetPeerID != "peer-a" {
 		t.Fatalf("unexpected pending udp probe status: %#v", status.PendingUDPProbes)
+	}
+	if err := client.ReportUDPProbeResult(ctx, "peer-a", "peer-b", "sha256-demo", true, ""); err != nil {
+		t.Fatal(err)
+	}
+	status, err = client.GetStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.RecentUDPProbeSuccesses != 1 {
+		t.Fatalf("unexpected recent udp probe successes: %d", status.RecentUDPProbeSuccesses)
+	}
+	if len(status.UDPProbeResults) != 1 || status.UDPProbeResults[0].SuccessCount != 1 {
+		t.Fatalf("unexpected udp probe result status: %#v", status.UDPProbeResults)
 	}
 }
 

@@ -69,6 +69,14 @@ func pollTrackerUDPProbeRequests(logger *logging.Logger, client *tracker.Client,
 			continue
 		}
 		if err := p2pnet.NewUDPClient(targetAddr, 2*time.Second).ProbeForPeer(request.ContentID, peerID); err != nil {
+			if reportErr := client.ReportUDPProbeResult(context.Background(), peerID, request.RequesterPeerID, request.ContentID, false, trackerProbeErrorKind(err)); reportErr != nil {
+				logger.Error("tracker_udp_probe_report_failed",
+					"contentId", request.ContentID,
+					"requesterPeerId", request.RequesterPeerID,
+					"targetPeerId", peerID,
+					"error", reportErr.Error(),
+				)
+			}
 			logger.Error("tracker_udp_probe_response_failed",
 				"contentId", request.ContentID,
 				"requesterPeerId", request.RequesterPeerID,
@@ -77,6 +85,14 @@ func pollTrackerUDPProbeRequests(logger *logging.Logger, client *tracker.Client,
 			)
 			continue
 		}
+		if reportErr := client.ReportUDPProbeResult(context.Background(), peerID, request.RequesterPeerID, request.ContentID, true, ""); reportErr != nil {
+			logger.Error("tracker_udp_probe_report_failed",
+				"contentId", request.ContentID,
+				"requesterPeerId", request.RequesterPeerID,
+				"targetPeerId", peerID,
+				"error", reportErr.Error(),
+			)
+		}
 		logger.Info("tracker_udp_probe_response_sent",
 			"contentId", request.ContentID,
 			"requesterPeerId", request.RequesterPeerID,
@@ -84,4 +100,14 @@ func pollTrackerUDPProbeRequests(logger *logging.Logger, client *tracker.Client,
 		)
 	}
 	return nil
+}
+
+func trackerProbeErrorKind(err error) string {
+	if err == nil {
+		return ""
+	}
+	if p2pnet.IsUDPTimeout(err) {
+		return "udp_timeout"
+	}
+	return "generic"
 }

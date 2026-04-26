@@ -75,10 +75,12 @@ func watchTrackerStatus(trackerURL string, interval time.Duration, pretty bool, 
 
 func printPrettyTrackerStatus(status tracker.StatusResponse) {
 	fmt.Printf(
-		"tracker peers=%d swarms=%d pendingUdpProbes=%d peerTTL=%ds cleanup=%ds\n",
+		"tracker peers=%d swarms=%d pendingUdpProbes=%d udpProbeSuccess=%d udpProbeFailure=%d peerTTL=%ds cleanup=%ds\n",
 		status.PeerCount,
 		status.SwarmCount,
 		status.PendingUDPProbeCount,
+		status.RecentUDPProbeSuccesses,
+		status.RecentUDPProbeFailures,
 		status.PeerTTLSeconds,
 		status.CleanupIntervalSeconds,
 	)
@@ -96,6 +98,31 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 		})
 		for _, item := range pending {
 			fmt.Printf("  %s requests=%d\n", item.TargetPeerID, item.RequestCount)
+		}
+	}
+	if len(status.UDPProbeResults) > 0 {
+		fmt.Println("udpProbeResults")
+		results := append([]tracker.UDPProbeResultStatus(nil), status.UDPProbeResults...)
+		sort.Slice(results, func(i, j int) bool {
+			left := maxInt64(results[i].LastFailureAt, results[i].LastSuccessAt)
+			right := maxInt64(results[j].LastFailureAt, results[j].LastSuccessAt)
+			if left != right {
+				return left > right
+			}
+			return results[i].TargetPeerID < results[j].TargetPeerID
+		})
+		for _, item := range results {
+			fmt.Printf(
+				"  %s success=%d failure=%d lastSuccess=%s lastFailure=%s lastError=%s requester=%s content=%s\n",
+				item.TargetPeerID,
+				item.SuccessCount,
+				item.FailureCount,
+				formatUnixTime(item.LastSuccessAt),
+				formatUnixTime(item.LastFailureAt),
+				emptyDash(item.LastErrorKind),
+				emptyDash(item.LastRequesterID),
+				shortContentID(item.LastContentID),
+			)
 		}
 	}
 	if len(status.Swarms) == 0 {
@@ -148,4 +175,25 @@ func formatHaveRanges(ranges []core.HaveRange) string {
 		parts = append(parts, fmt.Sprintf("%d-%d", current.Start, current.End))
 	}
 	return strings.Join(parts, ",")
+}
+
+func formatUnixTime(value int64) string {
+	if value == 0 {
+		return "-"
+	}
+	return time.Unix(value, 0).Format(time.RFC3339)
+}
+
+func emptyDash(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "-"
+	}
+	return value
+}
+
+func maxInt64(left int64, right int64) int64 {
+	if left > right {
+		return left
+	}
+	return right
 }
