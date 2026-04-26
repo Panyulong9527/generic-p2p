@@ -164,18 +164,26 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 	})
 
 	fmt.Println("swarms")
+	udpProbeResults := make(map[string]tracker.UDPProbeResultStatus, len(status.UDPProbeResults))
+	for _, item := range status.UDPProbeResults {
+		udpProbeResults[item.TargetPeerID] = item
+	}
+	peerTransferPaths := make(map[string]tracker.PeerTransferPathStatus, len(status.PeerTransferPaths))
+	for _, item := range status.PeerTransferPaths {
+		peerTransferPaths[item.TargetPeerID] = item
+	}
 	for _, swarm := range swarms {
-		fmt.Printf("  %s peers=%d\n", shortContentID(swarm.ContentID), swarm.PeerCount)
+		swarmMiss, swarmRecovered, swarmAligned := summarizeSwarmRouteDrift(swarm, udpProbeResults, peerTransferPaths)
+		fmt.Printf(
+			"  %s peers=%d udpMiss=%d udpRecovered=%d routeAligned=%d\n",
+			shortContentID(swarm.ContentID),
+			swarm.PeerCount,
+			swarmMiss,
+			swarmRecovered,
+			swarmAligned,
+		)
 
 		peers := append([]tracker.PeerRecord(nil), swarm.Peers...)
-		udpProbeResults := make(map[string]tracker.UDPProbeResultStatus, len(status.UDPProbeResults))
-		for _, item := range status.UDPProbeResults {
-			udpProbeResults[item.TargetPeerID] = item
-		}
-		peerTransferPaths := make(map[string]tracker.PeerTransferPathStatus, len(status.PeerTransferPaths))
-		for _, item := range status.PeerTransferPaths {
-			peerTransferPaths[item.TargetPeerID] = item
-		}
 		sort.Slice(peers, func(i, j int) bool {
 			return peers[i].PeerID < peers[j].PeerID
 		})
@@ -261,20 +269,31 @@ func summarizeTrackerRouteDrift(status tracker.StatusResponse) (int, int, int) {
 	udpRecovered := 0
 	aligned := 0
 	for _, swarm := range status.Swarms {
-		for _, peer := range swarm.Peers {
-			actual := peerTransferPaths[peer.PeerID]
-			if strings.TrimSpace(actual.LastPath) == "" {
-				continue
-			}
-			advice := trackerPeerRouteAdvice(peer, udpProbeResults[peer.PeerID])
-			switch trackerRouteDrift(advice, actual.LastPath) {
-			case "udp_miss":
-				udpMiss++
-			case "udp_recovered":
-				udpRecovered++
-			default:
-				aligned++
-			}
+		swarmMiss, swarmRecovered, swarmAligned := summarizeSwarmRouteDrift(swarm, udpProbeResults, peerTransferPaths)
+		udpMiss += swarmMiss
+		udpRecovered += swarmRecovered
+		aligned += swarmAligned
+	}
+	return udpMiss, udpRecovered, aligned
+}
+
+func summarizeSwarmRouteDrift(swarm tracker.SwarmStatus, udpProbeResults map[string]tracker.UDPProbeResultStatus, peerTransferPaths map[string]tracker.PeerTransferPathStatus) (int, int, int) {
+	udpMiss := 0
+	udpRecovered := 0
+	aligned := 0
+	for _, peer := range swarm.Peers {
+		actual := peerTransferPaths[peer.PeerID]
+		if strings.TrimSpace(actual.LastPath) == "" {
+			continue
+		}
+		advice := trackerPeerRouteAdvice(peer, udpProbeResults[peer.PeerID])
+		switch trackerRouteDrift(advice, actual.LastPath) {
+		case "udp_miss":
+			udpMiss++
+		case "udp_recovered":
+			udpRecovered++
+		default:
+			aligned++
 		}
 	}
 	return udpMiss, udpRecovered, aligned

@@ -769,13 +769,19 @@ const webAppHTML = `<!doctype html>
       const routeDriftSummary = summarizeRouteDrift(swarms, udpProbeResultMap, peerTransferPathMap);
       const swarmHTML = swarms.length
         ? swarms.map((swarm) =>
+          (() => {
+            const swarmRouteSummary = summarizeSingleSwarmRouteDrift(swarm, udpProbeResultMap, peerTransferPathMap);
+            return (
           '<div class="swarm">' +
             '<strong>' + escapeHTML(shortContentId(swarm.contentId)) + '</strong><br>' +
             swarm.peerCount + ' peers' +
+            '<br><span class="meta-inline">udp miss ' + swarmRouteSummary.udpMiss + ' / udp recovered ' + swarmRouteSummary.udpRecovered + ' / aligned ' + swarmRouteSummary.aligned + '</span>' +
             '<div class="subsection">' +
               renderSwarmPeers(swarm.peers || [], udpProbeResultMap, peerTransferPathMap) +
             '</div>' +
           '</div>'
+            );
+          })()
         ).join("")
         : '<div class="empty">No active P2P swarms.</div>';
       const pendingHTML = pendingUdpProbes.length
@@ -972,27 +978,40 @@ const webAppHTML = `<!doctype html>
         aligned: 0,
       };
       for (const swarm of swarms || []) {
-        for (const peer of swarm.peers || []) {
-          const route = peerRouteAdvice(peer, udpProbeResultMap[peer.peerId || ""] || null);
-          const transfer = peerTransferPathMap[peer.peerId || ""] || null;
-          if (!transfer || !transfer.lastPath) {
-            continue;
-          }
-          const drift = peerRouteDrift(route, transfer);
-          if (!drift) {
-            summary.aligned += 1;
-            continue;
-          }
-          if (drift.label === "udp miss") {
-            summary.udpMiss += 1;
-            continue;
-          }
-          if (drift.label === "udp recovered") {
-            summary.udpRecovered += 1;
-            continue;
-          }
-          summary.aligned += 1;
+        const current = summarizeSingleSwarmRouteDrift(swarm, udpProbeResultMap, peerTransferPathMap);
+        summary.udpMiss += current.udpMiss;
+        summary.udpRecovered += current.udpRecovered;
+        summary.aligned += current.aligned;
+      }
+      return summary;
+    }
+
+    function summarizeSingleSwarmRouteDrift(swarm, udpProbeResultMap, peerTransferPathMap) {
+      const summary = {
+        udpMiss: 0,
+        udpRecovered: 0,
+        aligned: 0,
+      };
+      for (const peer of (swarm && swarm.peers) || []) {
+        const route = peerRouteAdvice(peer, udpProbeResultMap[peer.peerId || ""] || null);
+        const transfer = peerTransferPathMap[peer.peerId || ""] || null;
+        if (!transfer || !transfer.lastPath) {
+          continue;
         }
+        const drift = peerRouteDrift(route, transfer);
+        if (!drift) {
+          summary.aligned += 1;
+          continue;
+        }
+        if (drift.label === "udp miss") {
+          summary.udpMiss += 1;
+          continue;
+        }
+        if (drift.label === "udp recovered") {
+          summary.udpRecovered += 1;
+          continue;
+        }
+        summary.aligned += 1;
       }
       return summary;
     }
