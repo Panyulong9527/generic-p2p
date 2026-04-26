@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -71,5 +72,107 @@ func TestTrackerUDPProbeBiasPenalizesGenericFailuresMoreHeavily(t *testing.T) {
 	}, now)
 	if older != -0.18 {
 		t.Fatalf("expected decayed generic failure bias -0.18, got %.2f", older)
+	}
+}
+
+func TestBuildTrackerUDPPeerBiasesIncludesRecentTransferDrift(t *testing.T) {
+	now := time.Unix(400, 0)
+	status := tracker.StatusResponse{
+		UDPProbeResults: []tracker.UDPProbeResultStatus{
+			{
+				TargetPeerID:  "peer-a",
+				LastSuccessAt: now.Add(-5 * time.Second).Unix(),
+			},
+			{
+				TargetPeerID:  "peer-b",
+				LastSuccessAt: now.Add(-5 * time.Second).Unix(),
+			},
+			{
+				TargetPeerID:  "peer-c",
+				LastFailureAt: now.Add(-4 * time.Second).Unix(),
+				LastErrorKind: "generic",
+			},
+		},
+		PeerTransferPaths: []tracker.PeerTransferPathStatus{
+			{
+				TargetPeerID: "peer-a",
+				ContentID:    "sha256-demo",
+				LastPath:     "tcp",
+				LastAt:       now.Add(-8 * time.Second).Unix(),
+				TCPCount:     3,
+			},
+			{
+				TargetPeerID: "peer-b",
+				ContentID:    "sha256-demo",
+				LastPath:     "udp",
+				LastAt:       now.Add(-6 * time.Second).Unix(),
+				UDPCount:     2,
+			},
+			{
+				TargetPeerID: "peer-c",
+				ContentID:    "sha256-demo",
+				LastPath:     "udp",
+				LastAt:       now.Add(-7 * time.Second).Unix(),
+				UDPCount:     1,
+			},
+		},
+		Swarms: []tracker.SwarmStatus{
+			{
+				ContentID: "sha256-demo",
+				Peers: []tracker.PeerRecord{
+					{PeerID: "peer-a", UDPAddrs: []string{"198.51.100.1:9003"}},
+					{PeerID: "peer-b", UDPAddrs: []string{"198.51.100.2:9003"}},
+					{PeerID: "peer-c", UDPAddrs: []string{"198.51.100.3:9003"}},
+				},
+			},
+		},
+	}
+
+	biases := buildTrackerUDPPeerBiases(status, "sha256-demo", now)
+	if got := biases["peer-a"]; math.Abs(got-(-0.03)) > 1e-9 {
+		t.Fatalf("expected peer-a combined bias -0.03, got %.2f", got)
+	}
+	if got := biases["peer-b"]; math.Abs(got-0.25) > 1e-9 {
+		t.Fatalf("expected peer-b combined bias 0.25, got %.2f", got)
+	}
+	if got := biases["peer-c"]; math.Abs(got-(-0.18)) > 1e-9 {
+		t.Fatalf("expected peer-c combined bias -0.18, got %.2f", got)
+	}
+}
+
+func TestTrackerTransferPathBiasDecaysAndIgnoresOtherContent(t *testing.T) {
+	now := time.Unix(500, 0)
+	status := tracker.StatusResponse{
+		PeerTransferPaths: []tracker.PeerTransferPathStatus{
+			{
+				TargetPeerID: "peer-a",
+				ContentID:    "sha256-other",
+				LastPath:     "tcp",
+				LastAt:       now.Add(-5 * time.Second).Unix(),
+			},
+			{
+				TargetPeerID: "peer-b",
+				ContentID:    "sha256-demo",
+				LastPath:     "tcp",
+				LastAt:       now.Add(-45 * time.Second).Unix(),
+			},
+		},
+		Swarms: []tracker.SwarmStatus{
+			{
+				ContentID: "sha256-demo",
+				Peers: []tracker.PeerRecord{
+					{PeerID: "peer-a", UDPAddrs: []string{"198.51.100.1:9003"}},
+					{PeerID: "peer-b", UDPAddrs: []string{"198.51.100.2:9003"}},
+				},
+			},
+		},
+	}
+
+	biases := buildTrackerUDPPeerBiases(status, "sha256-demo", now)
+	if got := biases["peer-a"]; math.Abs(got) > 1e-9 {
+		t.Fatalf("expected peer-a other-content transfer bias ignored, got %.2f", got)
+	}
+	if got := biases["peer-b"]; math.Abs(got-(-0.10)) > 1e-9 {
+		t.Fatalf("expected peer-b older udp miss bias -0.10, got %.2f", got)
 	}
 }

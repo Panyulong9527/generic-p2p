@@ -58,7 +58,7 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 		return nil, nil, fmt.Errorf("discover tracker udp peers: %w", err)
 	}
 
-	probeBiases := trackerUDPProbeBiases(client, trackerURL, trackerStatus)
+	probeBiases := trackerUDPProbeBiases(client, trackerURL, contentID, trackerStatus)
 	addrs := make([]string, 0, len(peers))
 	preferences := make(map[string]udpPeerPreference)
 	for _, peer := range peers {
@@ -354,11 +354,11 @@ func filterPeerCandidates(logger *logging.Logger, contentID string, candidates [
 	return filtered, nil
 }
 
-func trackerUDPProbeBiases(client *tracker.Client, trackerURL string, statusCache *trackerStatusCache) map[string]float64 {
+func trackerUDPProbeBiases(client *tracker.Client, trackerURL string, contentID string, statusCache *trackerStatusCache) map[string]float64 {
 	now := time.Now()
 	if statusCache != nil {
 		if cached, ok := statusCache.Load(trackerURL, now); ok {
-			return buildTrackerUDPProbeBiases(cached, now)
+			return buildTrackerUDPPeerBiases(cached, contentID, now)
 		}
 	}
 
@@ -369,13 +369,32 @@ func trackerUDPProbeBiases(client *tracker.Client, trackerURL string, statusCach
 	if statusCache != nil {
 		statusCache.Store(trackerURL, status, now)
 	}
-	return buildTrackerUDPProbeBiases(status, now)
+	return buildTrackerUDPPeerBiases(status, contentID, now)
 }
 
-func buildTrackerUDPProbeBiases(status tracker.StatusResponse, now time.Time) map[string]float64 {
+func buildTrackerUDPPeerBiases(status tracker.StatusResponse, contentID string, now time.Time) map[string]float64 {
 	biases := make(map[string]float64, len(status.UDPProbeResults))
 	for _, result := range status.UDPProbeResults {
 		biases[result.TargetPeerID] = trackerUDPProbeBias(result, now)
+	}
+	probeResults := make(map[string]tracker.UDPProbeResultStatus, len(status.UDPProbeResults))
+	for _, result := range status.UDPProbeResults {
+		probeResults[result.TargetPeerID] = result
+	}
+	transferPaths := make(map[string]tracker.PeerTransferPathStatus, len(status.PeerTransferPaths))
+	for _, path := range status.PeerTransferPaths {
+		if strings.TrimSpace(path.ContentID) != "" && path.ContentID != contentID {
+			continue
+		}
+		transferPaths[path.TargetPeerID] = path
+	}
+	for _, swarm := range status.Swarms {
+		if swarm.ContentID != contentID {
+			continue
+		}
+		for _, peer := range swarm.Peers {
+			biases[peer.PeerID] += trackerTransferPathBias(peer, probeResults[peer.PeerID], transferPaths[peer.PeerID], now)
+		}
 	}
 	return biases
 }
@@ -412,6 +431,88 @@ func trackerUDPFailurePenalty(errorKind string) float64 {
 	default:
 		return -0.30
 	}
+}
+
+func trackerTransferPathBias(peer tracker.PeerRecord, probeResult tracker.UDPProbeResultStatus, transferPath tracker.PeerTransferPathStatus, now time.Time) float64 {
+	if strings.TrimSpace(transferPath.LastPath) == "" || transferPath.LastAt == 0 {
+		return 0
+	}
+	advice := discoveryTrackerPeerRouteAdvice(peer, probeResult)
+	drift := discoveryTrackerRouteDrift(advice, transferPath.LastPath)
+	age := now.Sub(time.Unix(transferPath.LastAt, 0))
+	switch drift {
+	case "udp_miss":
+		switch {
+		case age <= 10*time.Second:
+			return -0.28
+		case age <= 30*time.Second:
+			return -0.18
+		case age <= time.Minute:
+			return -0.10
+		default:
+			return 0
+		}
+	case "udp_recovered":
+		switch {
+		case age <= 10*time.Second:
+			return 0.12
+		case age <= 30*time.Second:
+			return 0.08
+		case age <= time.Minute:
+			return 0.04
+		default:
+			return 0
+		}
+	default:
+		return 0
+	}
+}
+
+func discoveryTrackerPeerRouteAdvice(peer tracker.PeerRecord, result tracker.UDPProbeResultStatus) string {
+	hasUDPPath := len(peer.UDPAddrs) > 0 || strings.TrimSpace(peer.ObservedUDPAddr) != ""
+	if !hasUDPPath {
+		return "tcp_only"
+	}
+	if result.TargetPeerID == "" {
+		if strings.TrimSpace(peer.ObservedUDPAddr) != "" {
+			return "prefer_udp"
+		}
+		return "try_udp"
+	}
+	if result.LastSuccessAt > result.LastFailureAt {
+		return "prefer_udp"
+	}
+	if result.LastFailureAt > 0 {
+		if strings.TrimSpace(result.LastErrorKind) == peerFailureKindUDPTimeout {
+			return "udp_fallback"
+		}
+		return "prefer_tcp"
+	}
+	if strings.TrimSpace(peer.ObservedUDPAddr) != "" {
+		return "prefer_udp"
+	}
+	return "try_udp"
+}
+
+func discoveryTrackerRouteDrift(advice string, actual string) string {
+	recommended := ""
+	switch advice {
+	case "prefer_udp", "try_udp", "udp_fallback":
+		recommended = "udp"
+	case "prefer_tcp", "tcp_only":
+		recommended = "tcp"
+	}
+	actual = strings.TrimSpace(strings.ToLower(actual))
+	if recommended == "" || actual == "" {
+		return "-"
+	}
+	if recommended == "udp" && actual == "tcp" {
+		return "udp_miss"
+	}
+	if recommended == "tcp" && actual == "udp" {
+		return "udp_recovered"
+	}
+	return "aligned"
 }
 
 func maxFloat64(left float64, right float64) float64 {
