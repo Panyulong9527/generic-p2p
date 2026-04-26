@@ -392,14 +392,26 @@ func trackerUDPProbeBias(result tracker.UDPProbeResultStatus, now time.Time) flo
 	}
 	if result.LastFailureAt > 0 {
 		age := now.Sub(time.Unix(result.LastFailureAt, 0))
+		penalty := trackerUDPFailurePenalty(result.LastErrorKind)
 		switch {
 		case age <= 10*time.Second:
-			return -0.25
+			return penalty
 		case age <= 30*time.Second:
-			return -0.15
+			return penalty * 0.6
 		}
 	}
 	return 0
+}
+
+func trackerUDPFailurePenalty(errorKind string) float64 {
+	switch strings.TrimSpace(errorKind) {
+	case peerFailureKindUDPTimeout:
+		return -0.18
+	case "", peerFailureKindGeneric:
+		return -0.30
+	default:
+		return -0.30
+	}
 }
 
 func maxFloat64(left float64, right float64) float64 {

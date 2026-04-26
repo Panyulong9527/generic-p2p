@@ -47,7 +47,29 @@ func TestTrackerUDPProbeBiasPrefersRecentSuccessAndPenalizesRecentFailure(t *tes
 		FailureCount:  2,
 		SuccessCount:  0,
 	}, now)
-	if failure != -0.25 {
-		t.Fatalf("expected recent failure bias -0.25, got %.2f", failure)
+	if failure != -0.18 {
+		t.Fatalf("expected udp timeout failure bias -0.18, got %.2f", failure)
+	}
+}
+
+func TestTrackerUDPProbeBiasPenalizesGenericFailuresMoreHeavily(t *testing.T) {
+	now := time.Unix(300, 0)
+
+	failure := trackerUDPProbeBias(tracker.UDPProbeResultStatus{
+		TargetPeerID:  "peer-c",
+		LastFailureAt: now.Add(-6 * time.Second).Unix(),
+		LastErrorKind: "generic",
+	}, now)
+	if failure != -0.30 {
+		t.Fatalf("expected generic failure bias -0.30, got %.2f", failure)
+	}
+
+	older := trackerUDPProbeBias(tracker.UDPProbeResultStatus{
+		TargetPeerID:  "peer-d",
+		LastFailureAt: now.Add(-20 * time.Second).Unix(),
+		LastErrorKind: "generic",
+	}, now)
+	if older != -0.18 {
+		t.Fatalf("expected decayed generic failure bias -0.18, got %.2f", older)
 	}
 }
