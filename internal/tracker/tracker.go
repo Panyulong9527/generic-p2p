@@ -71,14 +71,21 @@ type SwarmStatus struct {
 	Peers     []PeerRecord `json:"peers"`
 }
 
+type PendingUDPProbeStatus struct {
+	TargetPeerID string `json:"targetPeerId"`
+	RequestCount int    `json:"requestCount"`
+}
+
 type StatusResponse struct {
-	GeneratedAt            string        `json:"generatedAt"`
-	PeerCount              int           `json:"peerCount"`
-	SwarmCount             int           `json:"swarmCount"`
-	PeerTTLSeconds         int           `json:"peerTtlSeconds"`
-	CleanupIntervalSeconds int           `json:"cleanupIntervalSeconds"`
-	StatePath              string        `json:"statePath,omitempty"`
-	Swarms                 []SwarmStatus `json:"swarms"`
+	GeneratedAt            string                  `json:"generatedAt"`
+	PeerCount              int                     `json:"peerCount"`
+	SwarmCount             int                     `json:"swarmCount"`
+	PendingUDPProbeCount   int                     `json:"pendingUdpProbeCount"`
+	PeerTTLSeconds         int                     `json:"peerTtlSeconds"`
+	CleanupIntervalSeconds int                     `json:"cleanupIntervalSeconds"`
+	StatePath              string                  `json:"statePath,omitempty"`
+	PendingUDPProbes       []PendingUDPProbeStatus `json:"pendingUdpProbes,omitempty"`
+	Swarms                 []SwarmStatus           `json:"swarms"`
 }
 
 type Server struct {
@@ -385,6 +392,7 @@ func (s *Server) Status() StatusResponse {
 		GeneratedAt:            now.Format(time.RFC3339),
 		PeerCount:              len(s.peers),
 		SwarmCount:             len(s.swarms),
+		PendingUDPProbes:       make([]PendingUDPProbeStatus, 0, len(s.udpProbes)),
 		PeerTTLSeconds:         int(s.peerTTL / time.Second),
 		CleanupIntervalSeconds: int(s.cleanupInterval / time.Second),
 		StatePath:              s.statePath,
@@ -405,6 +413,16 @@ func (s *Server) Status() StatusResponse {
 			swarm.Peers = append(swarm.Peers, record)
 		}
 		response.Swarms = append(response.Swarms, swarm)
+	}
+	for targetPeerID, tasks := range s.udpProbes {
+		if len(tasks) == 0 {
+			continue
+		}
+		response.PendingUDPProbeCount += len(tasks)
+		response.PendingUDPProbes = append(response.PendingUDPProbes, PendingUDPProbeStatus{
+			TargetPeerID: targetPeerID,
+			RequestCount: len(tasks),
+		})
 	}
 
 	return response

@@ -75,14 +75,28 @@ func watchTrackerStatus(trackerURL string, interval time.Duration, pretty bool, 
 
 func printPrettyTrackerStatus(status tracker.StatusResponse) {
 	fmt.Printf(
-		"tracker peers=%d swarms=%d peerTTL=%ds cleanup=%ds\n",
+		"tracker peers=%d swarms=%d pendingUdpProbes=%d peerTTL=%ds cleanup=%ds\n",
 		status.PeerCount,
 		status.SwarmCount,
+		status.PendingUDPProbeCount,
 		status.PeerTTLSeconds,
 		status.CleanupIntervalSeconds,
 	)
 	if status.StatePath != "" {
 		fmt.Printf("stateFile=%s\n", status.StatePath)
+	}
+	if len(status.PendingUDPProbes) > 0 {
+		fmt.Println("pendingUdpProbes")
+		pending := append([]tracker.PendingUDPProbeStatus(nil), status.PendingUDPProbes...)
+		sort.Slice(pending, func(i, j int) bool {
+			if pending[i].RequestCount != pending[j].RequestCount {
+				return pending[i].RequestCount > pending[j].RequestCount
+			}
+			return pending[i].TargetPeerID < pending[j].TargetPeerID
+		})
+		for _, item := range pending {
+			fmt.Printf("  %s requests=%d\n", item.TargetPeerID, item.RequestCount)
+		}
 	}
 	if len(status.Swarms) == 0 {
 		fmt.Println("swarms none")

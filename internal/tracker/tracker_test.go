@@ -207,6 +207,9 @@ func TestTrackerStatusIncludesSwarmDetails(t *testing.T) {
 	if err := client.JoinSwarm(ctx, "peer-a", "sha256-demo", []core.HaveRange{{Start: 0, End: 3}}); err != nil {
 		t.Fatal(err)
 	}
+	if err := client.RequestUDPProbe(ctx, "sha256-demo", "peer-b", "127.0.0.1:9004", "peer-a"); err != nil {
+		t.Fatal(err)
+	}
 
 	status, err := client.GetStatus(ctx)
 	if err != nil {
@@ -229,6 +232,12 @@ func TestTrackerStatusIncludesSwarmDetails(t *testing.T) {
 	}
 	if len(status.Swarms[0].Peers) != 1 || status.Swarms[0].Peers[0].PeerID != "peer-a" {
 		t.Fatalf("unexpected swarm peers: %#v", status.Swarms[0].Peers)
+	}
+	if status.PendingUDPProbeCount != 1 {
+		t.Fatalf("unexpected pending udp probe count: %d", status.PendingUDPProbeCount)
+	}
+	if len(status.PendingUDPProbes) != 1 || status.PendingUDPProbes[0].TargetPeerID != "peer-a" {
+		t.Fatalf("unexpected pending udp probe status: %#v", status.PendingUDPProbes)
 	}
 }
 
