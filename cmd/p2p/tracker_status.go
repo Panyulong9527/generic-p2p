@@ -74,13 +74,17 @@ func watchTrackerStatus(trackerURL string, interval time.Duration, pretty bool, 
 }
 
 func printPrettyTrackerStatus(status tracker.StatusResponse) {
+	udpMiss, udpRecovered, aligned := summarizeTrackerRouteDrift(status)
 	fmt.Printf(
-		"tracker peers=%d swarms=%d pendingUdpProbes=%d udpProbeSuccess=%d udpProbeFailure=%d peerTTL=%ds cleanup=%ds\n",
+		"tracker peers=%d swarms=%d pendingUdpProbes=%d udpProbeSuccess=%d udpProbeFailure=%d udpMiss=%d udpRecovered=%d routeAligned=%d peerTTL=%ds cleanup=%ds\n",
 		status.PeerCount,
 		status.SwarmCount,
 		status.PendingUDPProbeCount,
 		status.RecentUDPProbeSuccesses,
 		status.RecentUDPProbeFailures,
+		udpMiss,
+		udpRecovered,
+		aligned,
 		status.PeerTTLSeconds,
 		status.CleanupIntervalSeconds,
 	)
@@ -241,6 +245,39 @@ func trackerRouteDrift(advice string, actual string) string {
 		return "udp_recovered"
 	}
 	return "aligned"
+}
+
+func summarizeTrackerRouteDrift(status tracker.StatusResponse) (int, int, int) {
+	udpProbeResults := make(map[string]tracker.UDPProbeResultStatus, len(status.UDPProbeResults))
+	for _, item := range status.UDPProbeResults {
+		udpProbeResults[item.TargetPeerID] = item
+	}
+	peerTransferPaths := make(map[string]tracker.PeerTransferPathStatus, len(status.PeerTransferPaths))
+	for _, item := range status.PeerTransferPaths {
+		peerTransferPaths[item.TargetPeerID] = item
+	}
+
+	udpMiss := 0
+	udpRecovered := 0
+	aligned := 0
+	for _, swarm := range status.Swarms {
+		for _, peer := range swarm.Peers {
+			actual := peerTransferPaths[peer.PeerID]
+			if strings.TrimSpace(actual.LastPath) == "" {
+				continue
+			}
+			advice := trackerPeerRouteAdvice(peer, udpProbeResults[peer.PeerID])
+			switch trackerRouteDrift(advice, actual.LastPath) {
+			case "udp_miss":
+				udpMiss++
+			case "udp_recovered":
+				udpRecovered++
+			default:
+				aligned++
+			}
+		}
+	}
+	return udpMiss, udpRecovered, aligned
 }
 
 func formatHaveRanges(ranges []core.HaveRange) string {

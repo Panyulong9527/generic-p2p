@@ -766,6 +766,7 @@ const webAppHTML = `<!doctype html>
       const peerTransferPathMap = Object.fromEntries(
         peerTransferPaths.map((item) => [item.targetPeerId || "", item])
       );
+      const routeDriftSummary = summarizeRouteDrift(swarms, udpProbeResultMap, peerTransferPathMap);
       const swarmHTML = swarms.length
         ? swarms.map((swarm) =>
           '<div class="swarm">' +
@@ -820,6 +821,11 @@ const webAppHTML = `<!doctype html>
           '<div class="metric"><strong>' + status.cleanupIntervalSeconds + 's</strong><span>cleanup interval</span></div>' +
           '<div class="metric"><strong>' + escapeHTML(status.statePath || "-") + '</strong><span>state file</span></div>' +
           '<div class="metric"><strong>' + peerTransferPaths.length + '</strong><span>tracked transfer peers</span></div>' +
+        '</div>' +
+        '<div class="metric-row">' +
+          '<div class="metric"><strong>' + routeDriftSummary.udpMiss + '</strong><span>udp miss</span></div>' +
+          '<div class="metric"><strong>' + routeDriftSummary.udpRecovered + '</strong><span>udp recovered</span></div>' +
+          '<div class="metric"><strong>' + routeDriftSummary.aligned + '</strong><span>route aligned</span></div>' +
         '</div>' +
         pendingHTML +
         udpResultHTML +
@@ -957,6 +963,38 @@ const webAppHTML = `<!doctype html>
         return { className: "chip-info", label: "udp recovered" };
       }
       return null;
+    }
+
+    function summarizeRouteDrift(swarms, udpProbeResultMap, peerTransferPathMap) {
+      const summary = {
+        udpMiss: 0,
+        udpRecovered: 0,
+        aligned: 0,
+      };
+      for (const swarm of swarms || []) {
+        for (const peer of swarm.peers || []) {
+          const route = peerRouteAdvice(peer, udpProbeResultMap[peer.peerId || ""] || null);
+          const transfer = peerTransferPathMap[peer.peerId || ""] || null;
+          if (!transfer || !transfer.lastPath) {
+            continue;
+          }
+          const drift = peerRouteDrift(route, transfer);
+          if (!drift) {
+            summary.aligned += 1;
+            continue;
+          }
+          if (drift.label === "udp miss") {
+            summary.udpMiss += 1;
+            continue;
+          }
+          if (drift.label === "udp recovered") {
+            summary.udpRecovered += 1;
+            continue;
+          }
+          summary.aligned += 1;
+        }
+      }
+      return summary;
     }
 
     function recommendedTransport(advice) {
