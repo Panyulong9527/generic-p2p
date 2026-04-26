@@ -180,6 +180,7 @@ func appendUnique(base []string, values ...string) []string {
 func collectDynamicPeerCandidates(logger *logging.Logger, options peerDiscoveryOptions, peerHealth *peerHealthState, discoveryCache *peerDiscoveryCache, trackerStatus *trackerStatusCache, udpProbes *udpProbeCache, udpProbeRequests *udpProbeRequestCache, excluded map[string]bool, peerLoad *peerLoadState, peerUsage *peerUsageState) ([]scheduler.PeerCandidate, error) {
 	now := time.Now()
 	var candidates []scheduler.PeerCandidate
+	keepAliveRecentUDPSuccesses(logger, options.contentID, options.selfUDPListenAddr, now)
 	if discoveryCache != nil {
 		if cached, ok := discoveryCache.Load(options.contentID, now); ok {
 			return filterPeerCandidates(logger, options.contentID, cached, peerHealth, excluded, now, peerLoad, peerUsage)
@@ -223,6 +224,31 @@ func collectDynamicPeerCandidates(logger *logging.Logger, options peerDiscoveryO
 	}
 	candidates = freshCandidates
 	return filterPeerCandidates(logger, options.contentID, candidates, peerHealth, excluded, now, peerLoad, peerUsage)
+}
+
+func keepAliveRecentUDPSuccesses(logger *logging.Logger, contentID string, selfUDPListenAddr string, now time.Time) {
+	if strings.TrimSpace(selfUDPListenAddr) == "" {
+		return
+	}
+	for _, remoteAddr := range p2pnet.RecentUDPSuccessAddrs(contentID, 30*time.Second, now) {
+		if !p2pnet.ShouldKeepAliveRecentUDPSuccess(selfUDPListenAddr, contentID, remoteAddr, 6*time.Second, now) {
+			continue
+		}
+		go func(remote string) {
+			if err := p2pnet.NewUDPClient(remote, 1200*time.Millisecond).WithLocalAddr(selfUDPListenAddr).Probe(); err != nil {
+				logger.Info("udp_success_keepalive_failed",
+					"contentId", contentID,
+					"remote", remote,
+					"error", err.Error(),
+				)
+				return
+			}
+			logger.Info("udp_success_keepalive_sent",
+				"contentId", contentID,
+				"remote", remote,
+			)
+		}(remoteAddr)
+	}
 }
 
 func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs []string, udpPeerAddrs []string, selfUDPListenAddr string, udpPreferences map[string]udpPeerPreference, peerHealth *peerHealthState, udpProbes *udpProbeCache) ([]scheduler.PeerCandidate, error) {

@@ -165,6 +165,9 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 			}
 			usedCandidate = candidate
 			peerHealth.MarkSuccess(candidate.PeerID)
+			if candidate.Transport == "udp" {
+				p2pnet.RememberRecentUDPSuccess(manifest.ContentID, candidate.Addr, time.Now())
+			}
 			break
 		}
 		if lastErr != nil && usedCandidate.PeerID == "" {

@@ -165,6 +165,21 @@ func TestShouldKeepAliveObservedUDPPeerThrottlesRequests(t *testing.T) {
 	}
 }
 
+func TestRecentUDPSuccessAddrsExpiresAndSorts(t *testing.T) {
+	now := time.Unix(2000, 0)
+	RememberRecentUDPSuccess("content-recent", "198.51.100.3:9003", now.Add(-5*time.Second))
+	RememberRecentUDPSuccess("content-recent", "198.51.100.1:9003", now.Add(-4*time.Second))
+	RememberRecentUDPSuccess("content-recent", "198.51.100.2:9003", now.Add(-40*time.Second))
+
+	addrs := RecentUDPSuccessAddrs("content-recent", 30*time.Second, now)
+	if len(addrs) != 2 {
+		t.Fatalf("expected 2 recent udp success addrs, got %#v", addrs)
+	}
+	if addrs[0] != "198.51.100.1:9003" || addrs[1] != "198.51.100.3:9003" {
+		t.Fatalf("unexpected sorted recent udp success addrs: %#v", addrs)
+	}
+}
+
 func TestUDPClientProbeFailsWhenPeerUnavailable(t *testing.T) {
 	addr := freeUDPAddr(t)
 	client := NewUDPClient(addr, 50*time.Millisecond)

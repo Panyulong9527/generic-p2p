@@ -103,6 +103,11 @@ type observedUDPPeer struct {
 	SeenAt time.Time
 }
 
+type recentUDPSuccess struct {
+	Addr   string
+	SeenAt time.Time
+}
+
 type udpPendingRequest struct {
 	ch chan UDPMessage
 }
@@ -125,6 +130,13 @@ var udpKeepaliveState = struct {
 	lastRun map[string]time.Time
 }{
 	lastRun: make(map[string]time.Time),
+}
+
+var udpRecentSuccesses = struct {
+	mu      sync.Mutex
+	entries map[string]recentUDPSuccess
+}{
+	entries: make(map[string]recentUDPSuccess),
 }
 
 var udpSharedSockets = struct {
@@ -445,16 +457,21 @@ func ObservedUDPPeer(contentID string, peerID string, maxAge time.Duration, now 
 }
 
 func ShouldKeepAliveObservedUDPPeer(localAddr string, contentID string, peerID string, remoteAddr string, interval time.Duration, now time.Time) bool {
-	if strings.TrimSpace(localAddr) == "" || strings.TrimSpace(contentID) == "" || strings.TrimSpace(peerID) == "" || strings.TrimSpace(remoteAddr) == "" {
-		return false
-	}
-	if interval <= 0 {
+	return shouldKeepAliveUDPPath(localAddr, contentID+"|"+peerID+"|"+remoteAddr, interval, now)
+}
+
+func ShouldKeepAliveRecentUDPSuccess(localAddr string, contentID string, remoteAddr string, interval time.Duration, now time.Time) bool {
+	return shouldKeepAliveUDPPath(localAddr, contentID+"|recent-success|"+remoteAddr, interval, now)
+}
+
+func shouldKeepAliveUDPPath(localAddr string, pathKey string, interval time.Duration, now time.Time) bool {
+	if strings.TrimSpace(localAddr) == "" || strings.TrimSpace(pathKey) == "" || interval <= 0 {
 		return false
 	}
 	if _, ok := lookupUDPSharedSocket(localAddr); !ok {
 		return false
 	}
-	key := localAddr + "|" + contentID + "|" + peerID + "|" + remoteAddr
+	key := localAddr + "|" + pathKey
 	udpKeepaliveState.mu.Lock()
 	defer udpKeepaliveState.mu.Unlock()
 	lastRun, ok := udpKeepaliveState.lastRun[key]
@@ -463,6 +480,40 @@ func ShouldKeepAliveObservedUDPPeer(localAddr string, contentID string, peerID s
 	}
 	udpKeepaliveState.lastRun[key] = now
 	return true
+}
+
+func RememberRecentUDPSuccess(contentID string, addr string, now time.Time) {
+	if strings.TrimSpace(contentID) == "" || strings.TrimSpace(addr) == "" {
+		return
+	}
+	udpRecentSuccesses.mu.Lock()
+	defer udpRecentSuccesses.mu.Unlock()
+	udpRecentSuccesses.entries[contentID+"|"+addr] = recentUDPSuccess{
+		Addr:   addr,
+		SeenAt: now,
+	}
+}
+
+func RecentUDPSuccessAddrs(contentID string, maxAge time.Duration, now time.Time) []string {
+	if strings.TrimSpace(contentID) == "" {
+		return nil
+	}
+	udpRecentSuccesses.mu.Lock()
+	defer udpRecentSuccesses.mu.Unlock()
+	prefix := contentID + "|"
+	addrs := make([]string, 0)
+	for key, entry := range udpRecentSuccesses.entries {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if maxAge > 0 && now.Sub(entry.SeenAt) > maxAge {
+			delete(udpRecentSuccesses.entries, key)
+			continue
+		}
+		addrs = append(addrs, entry.Addr)
+	}
+	sort.Strings(addrs)
+	return addrs
 }
 
 func (c *UDPClient) FetchHave(contentID string) ([]core.HaveRange, error) {
