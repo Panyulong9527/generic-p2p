@@ -588,6 +588,38 @@ const webAppHTML = `<!doctype html>
       font-weight: 800;
       text-transform: uppercase;
     }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 0 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      border: 1px solid transparent;
+    }
+    .chip-ok {
+      color: #0d4f37;
+      background: rgba(23, 109, 77, 0.12);
+      border-color: rgba(23, 109, 77, 0.25);
+    }
+    .chip-timeout {
+      color: #8a4a18;
+      background: rgba(199, 95, 42, 0.12);
+      border-color: rgba(199, 95, 42, 0.25);
+    }
+    .chip-fail {
+      color: #7a2b23;
+      background: rgba(159, 58, 47, 0.12);
+      border-color: rgba(159, 58, 47, 0.25);
+    }
+    .chip-idle {
+      color: var(--muted);
+      background: rgba(93, 107, 99, 0.08);
+      border-color: rgba(93, 107, 99, 0.18);
+    }
     @media (max-width: 760px) {
       main { width: min(100vw - 20px, 1120px); padding-top: 18px; }
       .grid { grid-template-columns: 1fr; }
@@ -717,7 +749,7 @@ const webAppHTML = `<!doctype html>
             '<h3>UDP Probe Results</h3>' +
             udpProbeResults.map((item) =>
               '<div class="swarm">' +
-                '<strong>' + escapeHTML(item.targetPeerId || "peer") + '</strong><br>' +
+                '<strong>' + escapeHTML(item.targetPeerId || "peer") + '</strong> ' + formatProbeResultChip(item) + '<br>' +
                 'success ' + (item.successCount || 0) + ' / failure ' + (item.failureCount || 0) +
                 '<br>last success ' + formatTimestamp(item.lastSuccessAt) +
                 '<br>last failure ' + formatTimestamp(item.lastFailureAt) +
@@ -763,6 +795,22 @@ const webAppHTML = `<!doctype html>
     function formatTimestamp(value) {
       if (!value) return "-";
       return new Date(value * 1000).toLocaleString();
+    }
+
+    function formatProbeResultChip(item) {
+      const lastSuccess = item.lastSuccessAt || 0;
+      const lastFailure = item.lastFailureAt || 0;
+      if (lastSuccess > lastFailure) {
+        return '<span class="chip chip-ok">recent success</span>';
+      }
+      if (lastFailure > 0) {
+        const kind = String(item.lastErrorKind || "").trim();
+        if (kind === "udp_timeout") {
+          return '<span class="chip chip-timeout">udp timeout</span>';
+        }
+        return '<span class="chip chip-fail">' + escapeHTML(kind || "failure") + '</span>';
+      }
+      return '<span class="chip chip-idle">no result</span>';
     }
 
     function escapeHTML(value) {
