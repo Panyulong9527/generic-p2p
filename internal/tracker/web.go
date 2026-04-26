@@ -725,11 +725,17 @@ const webAppHTML = `<!doctype html>
       const swarms = status.swarms || [];
       const pendingUdpProbes = status.pendingUdpProbes || [];
       const udpProbeResults = status.udpProbeResults || [];
+      const udpProbeResultMap = Object.fromEntries(
+        udpProbeResults.map((item) => [item.targetPeerId || "", item])
+      );
       const swarmHTML = swarms.length
         ? swarms.map((swarm) =>
           '<div class="swarm">' +
             '<strong>' + escapeHTML(shortContentId(swarm.contentId)) + '</strong><br>' +
-            swarm.peerCount + ' peers / ' + peerSummary(swarm.peers || []) +
+            swarm.peerCount + ' peers' +
+            '<div class="subsection">' +
+              renderSwarmPeers(swarm.peers || [], udpProbeResultMap) +
+            '</div>' +
           '</div>'
         ).join("")
         : '<div class="empty">No active P2P swarms.</div>';
@@ -792,12 +798,28 @@ const webAppHTML = `<!doctype html>
       return peers.map((peer) => escapeHTML(peer.peerId || "peer")).join(", ");
     }
 
+    function renderSwarmPeers(peers, udpProbeResultMap) {
+      if (!peers.length) return '<div class="empty">No peers</div>';
+      return peers.map((peer) => {
+        const result = udpProbeResultMap[peer.peerId || ""] || null;
+        return '<div class="swarm">' +
+          '<strong>' + escapeHTML(peer.peerId || "peer") + '</strong> ' + formatProbeResultChip(result) + '<br>' +
+          'udp ' + escapeHTML((peer.udpAddrs || []).join(",") || "-") +
+          '<br>observed ' + escapeHTML(peer.observedUdpAddr || "-") +
+          '<br>have ' + escapeHTML(formatHaveRanges(peer.haveRanges || [])) +
+        '</div>';
+      }).join("");
+    }
+
     function formatTimestamp(value) {
       if (!value) return "-";
       return new Date(value * 1000).toLocaleString();
     }
 
     function formatProbeResultChip(item) {
+      if (!item) {
+        return '<span class="chip chip-idle">no result</span>';
+      }
       const lastSuccess = item.lastSuccessAt || 0;
       const lastFailure = item.lastFailureAt || 0;
       if (lastSuccess > lastFailure) {
@@ -811,6 +833,14 @@ const webAppHTML = `<!doctype html>
         return '<span class="chip chip-fail">' + escapeHTML(kind || "failure") + '</span>';
       }
       return '<span class="chip chip-idle">no result</span>';
+    }
+
+    function formatHaveRanges(ranges) {
+      if (!ranges.length) return "none";
+      return ranges.map((item) => {
+        if (item.start === item.end) return String(item.start);
+        return String(item.start) + "-" + String(item.end);
+      }).join(",");
     }
 
     function escapeHTML(value) {
