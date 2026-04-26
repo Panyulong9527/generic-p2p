@@ -218,7 +218,7 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 	}
 	for _, addr := range udpPeerAddrs {
 		peerID := "udp://" + addr
-		client := p2pnet.NewUDPClient(addr, 10*time.Second)
+		client := p2pnet.NewUDPClient(addr, 3*time.Second)
 		now := time.Now()
 		if ok, cached := udpProbes.Load(addr, now); cached {
 			if !ok {
@@ -235,6 +235,7 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 				logger.Error("udp_peer_probe_failed",
 					"contentId", contentID,
 					"peer", peerID,
+					"errorKind", udpDiscoveryErrorKind(err),
 					"cooldownMs", cooldown.Milliseconds(),
 					"error", err.Error(),
 				)
@@ -252,6 +253,7 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 			logger.Error("udp_peer_have_failed",
 				"contentId", contentID,
 				"peer", peerID,
+				"errorKind", udpDiscoveryErrorKind(err),
 				"cooldownMs", cooldown.Milliseconds(),
 				"error", err.Error(),
 			)
@@ -274,6 +276,16 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 		return nil, fmt.Errorf("no reachable peers for content %s", contentID)
 	}
 	return candidates, nil
+}
+
+func udpDiscoveryErrorKind(err error) string {
+	if err == nil {
+		return ""
+	}
+	if p2pnet.IsUDPTimeout(err) {
+		return "udp_timeout"
+	}
+	return "generic"
 }
 
 func udpCandidateScore(addr string, preferredUDPAddrs map[string]bool) float64 {

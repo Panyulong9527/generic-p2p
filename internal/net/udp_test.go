@@ -73,6 +73,8 @@ func TestUDPClientProbeFailsWhenPeerUnavailable(t *testing.T) {
 	client := NewUDPClient(addr, 50*time.Millisecond)
 	if err := client.Probe(); err == nil {
 		t.Fatal("expected probe to fail without a UDP server")
+	} else if !IsUDPTimeout(err) {
+		t.Fatalf("expected timeout-classified error, got %v", err)
 	}
 }
 

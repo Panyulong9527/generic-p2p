@@ -149,6 +149,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 					"attempt", attempt+1,
 					"burstTry", burstIndex+1,
 					"burstPeers", len(attemptCandidates),
+					"errorKind", transferErrorKind(candidate, lastErr),
 					"cooldownMs", cooldown.Milliseconds(),
 					"error", lastErr.Error(),
 				)
@@ -195,7 +196,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 func fetchPieceFromCandidate(candidate scheduler.PeerCandidate, contentID string, pieceIndex int) ([]byte, error) {
 	switch candidate.Transport {
 	case "udp":
-		return p2pnet.NewUDPClient(candidate.Addr, 10*time.Second).FetchPiece(contentID, pieceIndex)
+		return p2pnet.NewUDPClient(candidate.Addr, 4*time.Second).FetchPiece(contentID, pieceIndex)
 	default:
 		addr := candidate.Addr
 		if addr == "" {
@@ -203,6 +204,16 @@ func fetchPieceFromCandidate(candidate scheduler.PeerCandidate, contentID string
 		}
 		return p2pnet.NewClient(addr, 10*time.Second).FetchPiece(contentID, pieceIndex)
 	}
+}
+
+func transferErrorKind(candidate scheduler.PeerCandidate, err error) string {
+	if err == nil {
+		return ""
+	}
+	if candidate.Transport == "udp" && p2pnet.IsUDPTimeout(err) {
+		return "udp_timeout"
+	}
+	return "generic"
 }
 
 func pieceAttemptCandidates(pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) []scheduler.PeerCandidate {

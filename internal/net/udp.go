@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -72,6 +73,29 @@ type UDPPieceChunk struct {
 type UDPError struct {
 	RequestID string `json:"requestId"`
 	Message   string `json:"message"`
+}
+
+type UDPTimeoutError struct {
+	Op   string
+	Addr string
+	Err  error
+}
+
+func (e *UDPTimeoutError) Error() string {
+	if e == nil {
+		return "udp timeout"
+	}
+	if e.Addr == "" {
+		return fmt.Sprintf("%s timed out: %v", e.Op, e.Err)
+	}
+	return fmt.Sprintf("%s %s timed out: %v", e.Op, e.Addr, e.Err)
+}
+
+func (e *UDPTimeoutError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
 }
 
 type observedUDPPeer struct {
@@ -246,7 +270,7 @@ func (c *UDPClient) probe(contentID string, peerID string) error {
 		}
 		n, _, err := conn.ReadFromUDP(buffer)
 		if err != nil {
-			return err
+			return wrapUDPReadError("probe", c.Addr, err)
 		}
 		message, err := decodeUDPMessage(buffer[:n])
 		if err != nil {
@@ -335,7 +359,7 @@ func (c *UDPClient) FetchHave(contentID string) ([]core.HaveRange, error) {
 		}
 		n, _, err := conn.ReadFromUDP(buffer)
 		if err != nil {
-			return nil, err
+			return nil, wrapUDPReadError("fetch-have", c.Addr, err)
 		}
 		message, err := decodeUDPMessage(buffer[:n])
 		if err != nil {
@@ -394,14 +418,18 @@ func (c *UDPClient) FetchPiece(contentID string, pieceIndex int) ([]byte, error)
 			return joinUDPChunks(chunks, totalChunks), nil
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("udp piece %d timed out", pieceIndex)
+			return nil, &UDPTimeoutError{
+				Op:   fmt.Sprintf("fetch-piece-%d", pieceIndex),
+				Addr: c.Addr,
+				Err:  errors.New("piece deadline exceeded"),
+			}
 		}
 		if err := conn.SetReadDeadline(deadline); err != nil {
 			return nil, err
 		}
 		n, _, err := conn.ReadFromUDP(buffer)
 		if err != nil {
-			return nil, err
+			return nil, wrapUDPReadError(fmt.Sprintf("fetch-piece-%d", pieceIndex), c.Addr, err)
 		}
 		message, err := decodeUDPMessage(buffer[:n])
 		if err != nil {
@@ -512,4 +540,34 @@ func joinUDPChunks(chunks map[int][]byte, totalChunks int) []byte {
 		data = append(data, chunks[index]...)
 	}
 	return data
+}
+
+func IsUDPTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	var udpTimeout *UDPTimeoutError
+	if errors.As(err, &udpTimeout) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "timed out")
+}
+
+func wrapUDPReadError(op string, addr string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return &UDPTimeoutError{
+			Op:   op,
+			Addr: addr,
+			Err:  err,
+		}
+	}
+	return err
 }
