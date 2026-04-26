@@ -164,23 +164,83 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 		fmt.Printf("  %s peers=%d\n", shortContentID(swarm.ContentID), swarm.PeerCount)
 
 		peers := append([]tracker.PeerRecord(nil), swarm.Peers...)
+		udpProbeResults := make(map[string]tracker.UDPProbeResultStatus, len(status.UDPProbeResults))
+		for _, item := range status.UDPProbeResults {
+			udpProbeResults[item.TargetPeerID] = item
+		}
+		peerTransferPaths := make(map[string]tracker.PeerTransferPathStatus, len(status.PeerTransferPaths))
+		for _, item := range status.PeerTransferPaths {
+			peerTransferPaths[item.TargetPeerID] = item
+		}
 		sort.Slice(peers, func(i, j int) bool {
 			return peers[i].PeerID < peers[j].PeerID
 		})
 
 		for _, peer := range peers {
+			advice := trackerPeerRouteAdvice(peer, udpProbeResults[peer.PeerID])
+			actual := peerTransferPaths[peer.PeerID]
 			fmt.Printf(
-				"    %s addrs=%s observed=%s udp=%s observedUdp=%s have=%s lastSeen=%s\n",
+				"    %s addrs=%s observed=%s udp=%s observedUdp=%s route=%s actual=%s routeDrift=%s have=%s lastSeen=%s\n",
 				peer.PeerID,
 				strings.Join(peer.Addrs, ","),
 				peer.ObservedAddr,
 				strings.Join(peer.UDPAddrs, ","),
 				peer.ObservedUDPAddr,
+				advice,
+				emptyDash(actual.LastPath),
+				trackerRouteDrift(advice, actual.LastPath),
 				formatHaveRanges(peer.HaveRanges),
 				time.Unix(peer.LastSeenAt, 0).Format(time.RFC3339),
 			)
 		}
 	}
+}
+
+func trackerPeerRouteAdvice(peer tracker.PeerRecord, result tracker.UDPProbeResultStatus) string {
+	hasUDPPath := len(peer.UDPAddrs) > 0 || strings.TrimSpace(peer.ObservedUDPAddr) != ""
+	if !hasUDPPath {
+		return "tcp_only"
+	}
+	if result.TargetPeerID == "" {
+		if strings.TrimSpace(peer.ObservedUDPAddr) != "" {
+			return "prefer_udp"
+		}
+		return "try_udp"
+	}
+	if result.LastSuccessAt > result.LastFailureAt {
+		return "prefer_udp"
+	}
+	if result.LastFailureAt > 0 {
+		if strings.TrimSpace(result.LastErrorKind) == "udp_timeout" {
+			return "udp_fallback"
+		}
+		return "prefer_tcp"
+	}
+	if strings.TrimSpace(peer.ObservedUDPAddr) != "" {
+		return "prefer_udp"
+	}
+	return "try_udp"
+}
+
+func trackerRouteDrift(advice string, actual string) string {
+	recommended := ""
+	switch advice {
+	case "prefer_udp", "try_udp", "udp_fallback":
+		recommended = "udp"
+	case "prefer_tcp", "tcp_only":
+		recommended = "tcp"
+	}
+	actual = strings.TrimSpace(strings.ToLower(actual))
+	if recommended == "" || actual == "" {
+		return "-"
+	}
+	if recommended == "udp" && actual == "tcp" {
+		return "udp_miss"
+	}
+	if recommended == "tcp" && actual == "udp" {
+		return "udp_recovered"
+	}
+	return "aligned"
 }
 
 func formatHaveRanges(ranges []core.HaveRange) string {
