@@ -141,7 +141,8 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 				_ = runtime.FinishDownload(pieceIndex)
 			}
 			if lastErr != nil {
-				cooldown := peerHealth.MarkFailure(candidate.PeerID, time.Now())
+				errorKind := transferErrorKind(candidate, lastErr)
+				cooldown := peerHealth.MarkFailureKind(candidate.PeerID, errorKind, time.Now())
 				logger.Error("piece_download_failed",
 					"contentId", manifest.ContentID,
 					"pieceIndex", pieceIndex,
@@ -149,7 +150,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 					"attempt", attempt+1,
 					"burstTry", burstIndex+1,
 					"burstPeers", len(attemptCandidates),
-					"errorKind", transferErrorKind(candidate, lastErr),
+					"errorKind", errorKind,
 					"cooldownMs", cooldown.Milliseconds(),
 					"error", lastErr.Error(),
 				)

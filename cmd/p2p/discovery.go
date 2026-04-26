@@ -247,13 +247,14 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 		haveRanges, err := client.FetchHave(contentID)
 		if err != nil {
 			var cooldown time.Duration
+			errorKind := udpDiscoveryErrorKind(err)
 			if peerHealth != nil {
-				cooldown = peerHealth.MarkFailure(peerID, time.Now())
+				cooldown = peerHealth.MarkFailureKind(peerID, errorKind, time.Now())
 			}
 			logger.Error("udp_peer_have_failed",
 				"contentId", contentID,
 				"peer", peerID,
-				"errorKind", udpDiscoveryErrorKind(err),
+				"errorKind", errorKind,
 				"cooldownMs", cooldown.Milliseconds(),
 				"error", err.Error(),
 			)

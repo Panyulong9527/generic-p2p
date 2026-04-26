@@ -59,3 +59,15 @@ func TestPeerCooldownForFailuresCapsBackoff(t *testing.T) {
 		t.Fatalf("expected capped cooldown of 5s, got %s", got)
 	}
 }
+
+func TestPeerCooldownForUDPTimeoutFailuresUsesShorterBackoff(t *testing.T) {
+	if got := peerCooldownForFailureKind(1, peerFailureKindUDPTimeout); got != 120*time.Millisecond {
+		t.Fatalf("expected 120ms, got %s", got)
+	}
+	if got := peerCooldownForFailureKind(3, peerFailureKindUDPTimeout); got != 480*time.Millisecond {
+		t.Fatalf("expected 480ms, got %s", got)
+	}
+	if got := peerCooldownForFailureKind(10, peerFailureKindUDPTimeout); got != 1500*time.Millisecond {
+		t.Fatalf("expected capped cooldown of 1500ms, got %s", got)
+	}
+}
