@@ -76,12 +76,14 @@ func watchTrackerStatus(trackerURL string, interval time.Duration, pretty bool, 
 func printPrettyTrackerStatus(status tracker.StatusResponse) {
 	udpMiss, udpRecovered, aligned := summarizeTrackerRouteDrift(status)
 	fmt.Printf(
-		"tracker peers=%d swarms=%d pendingUdpProbes=%d udpProbeSuccess=%d udpProbeFailure=%d udpMiss=%d udpRecovered=%d routeAligned=%d peerTTL=%ds cleanup=%ds\n",
+		"tracker peers=%d swarms=%d pendingUdpProbes=%d udpProbeSuccess=%d udpProbeFailure=%d udpKeepaliveSuccess=%d udpKeepaliveFailure=%d udpMiss=%d udpRecovered=%d routeAligned=%d peerTTL=%ds cleanup=%ds\n",
 		status.PeerCount,
 		status.SwarmCount,
 		status.PendingUDPProbeCount,
 		status.RecentUDPProbeSuccesses,
 		status.RecentUDPProbeFailures,
+		status.RecentUDPKeepaliveSuccesses,
+		status.RecentUDPKeepaliveFailures,
 		udpMiss,
 		udpRecovered,
 		aligned,
@@ -146,6 +148,30 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 				formatUnixTime(item.LastAt),
 				item.UDPCount,
 				item.TCPCount,
+				shortContentID(item.ContentID),
+			)
+		}
+	}
+	if len(status.UDPKeepaliveResults) > 0 {
+		fmt.Println("udpKeepaliveResults")
+		results := append([]tracker.UDPKeepaliveStatus(nil), status.UDPKeepaliveResults...)
+		sort.Slice(results, func(i, j int) bool {
+			left := maxInt64(results[i].LastFailureAt, results[i].LastSuccessAt)
+			right := maxInt64(results[j].LastFailureAt, results[j].LastSuccessAt)
+			if left != right {
+				return left > right
+			}
+			return results[i].TargetPeerID < results[j].TargetPeerID
+		})
+		for _, item := range results {
+			fmt.Printf(
+				"  %s success=%d failure=%d lastSuccess=%s lastFailure=%s lastError=%s content=%s\n",
+				item.TargetPeerID,
+				item.SuccessCount,
+				item.FailureCount,
+				formatUnixTime(item.LastSuccessAt),
+				formatUnixTime(item.LastFailureAt),
+				emptyDash(item.LastErrorKind),
 				shortContentID(item.ContentID),
 			)
 		}

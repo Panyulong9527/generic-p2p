@@ -262,6 +262,12 @@ func TestTrackerStatusIncludesSwarmDetails(t *testing.T) {
 	if err := client.ReportTransferPath(ctx, "peer-a", "sha256-demo", "tcp"); err != nil {
 		t.Fatal(err)
 	}
+	if err := client.ReportUDPKeepaliveResult(ctx, "udp://127.0.0.1:9004", "sha256-demo", true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ReportUDPKeepaliveResult(ctx, "udp://127.0.0.1:9004", "sha256-demo", false, "udp_timeout"); err != nil {
+		t.Fatal(err)
+	}
 	status, err = client.GetStatus(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -280,6 +286,15 @@ func TestTrackerStatusIncludesSwarmDetails(t *testing.T) {
 	}
 	if status.PeerTransferPaths[0].UDPCount != 1 || status.PeerTransferPaths[0].TCPCount != 1 {
 		t.Fatalf("unexpected transfer path counters: %#v", status.PeerTransferPaths[0])
+	}
+	if status.RecentUDPKeepaliveSuccesses != 1 || status.RecentUDPKeepaliveFailures != 1 {
+		t.Fatalf("unexpected udp keepalive counters: success=%d failure=%d", status.RecentUDPKeepaliveSuccesses, status.RecentUDPKeepaliveFailures)
+	}
+	if len(status.UDPKeepaliveResults) != 1 || status.UDPKeepaliveResults[0].TargetPeerID != "udp://127.0.0.1:9004" {
+		t.Fatalf("unexpected udp keepalive results: %#v", status.UDPKeepaliveResults)
+	}
+	if status.UDPKeepaliveResults[0].LastErrorKind != "udp_timeout" {
+		t.Fatalf("unexpected udp keepalive error kind: %#v", status.UDPKeepaliveResults[0])
 	}
 }
 

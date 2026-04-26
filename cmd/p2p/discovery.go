@@ -85,7 +85,7 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 			pref.observedAt = seenAt
 			pref.trackerBias = maxFloat64(pref.trackerBias, probeBiases[peer.PeerID])
 			preferences[observedAddr] = pref
-			maybeKeepAliveUDPPath(logger, contentID, peer.PeerID, selfUDPListenAddr, observedAddr, now)
+			maybeKeepAliveUDPPath(logger, contentID, peer.PeerID, trackerURL, selfUDPListenAddr, observedAddr, now)
 		}
 		for _, addr := range peer.UDPAddrs {
 			if addr == "" || addr == selfUDPListenAddr {
@@ -113,18 +113,19 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 			pref := preferences[peer.ObservedUDPAddr]
 			pref.trackerBias = maxFloat64(pref.trackerBias, probeBiases[peer.PeerID])
 			preferences[peer.ObservedUDPAddr] = pref
-			maybeKeepAliveUDPPath(logger, contentID, peer.PeerID, selfUDPListenAddr, peer.ObservedUDPAddr, now)
+			maybeKeepAliveUDPPath(logger, contentID, peer.PeerID, trackerURL, selfUDPListenAddr, peer.ObservedUDPAddr, now)
 		}
 	}
 	return addrs, preferences, nil
 }
 
-func maybeKeepAliveUDPPath(logger *logging.Logger, contentID string, peerID string, selfUDPListenAddr string, remoteAddr string, now time.Time) {
+func maybeKeepAliveUDPPath(logger *logging.Logger, contentID string, peerID string, trackerURL string, selfUDPListenAddr string, remoteAddr string, now time.Time) {
 	if !p2pnet.ShouldKeepAliveObservedUDPPeer(selfUDPListenAddr, contentID, peerID, remoteAddr, 8*time.Second, now) {
 		return
 	}
 	go func() {
 		if err := p2pnet.NewUDPClient(remoteAddr, 1500*time.Millisecond).WithLocalAddr(selfUDPListenAddr).ProbeForPeer(contentID, peerID); err != nil {
+			reportTrackerUDPKeepalive(logger, trackerURL, "udp://"+remoteAddr, contentID, false, udpDiscoveryErrorKind(err))
 			logger.Info("udp_keepalive_failed",
 				"contentId", contentID,
 				"peerId", peerID,
@@ -133,6 +134,7 @@ func maybeKeepAliveUDPPath(logger *logging.Logger, contentID string, peerID stri
 			)
 			return
 		}
+		reportTrackerUDPKeepalive(logger, trackerURL, "udp://"+remoteAddr, contentID, true, "")
 		logger.Info("udp_keepalive_sent",
 			"contentId", contentID,
 			"peerId", peerID,
@@ -180,7 +182,7 @@ func appendUnique(base []string, values ...string) []string {
 func collectDynamicPeerCandidates(logger *logging.Logger, options peerDiscoveryOptions, peerHealth *peerHealthState, discoveryCache *peerDiscoveryCache, trackerStatus *trackerStatusCache, udpProbes *udpProbeCache, udpProbeRequests *udpProbeRequestCache, excluded map[string]bool, peerLoad *peerLoadState, peerUsage *peerUsageState) ([]scheduler.PeerCandidate, error) {
 	now := time.Now()
 	var candidates []scheduler.PeerCandidate
-	keepAliveRecentUDPSuccesses(logger, options.contentID, options.selfUDPListenAddr, now)
+	keepAliveRecentUDPSuccesses(logger, options.contentID, options.trackerURL, options.selfUDPListenAddr, now)
 	if discoveryCache != nil {
 		if cached, ok := discoveryCache.Load(options.contentID, now); ok {
 			return filterPeerCandidates(logger, options.contentID, cached, peerHealth, excluded, now, peerLoad, peerUsage)
@@ -226,7 +228,7 @@ func collectDynamicPeerCandidates(logger *logging.Logger, options peerDiscoveryO
 	return filterPeerCandidates(logger, options.contentID, candidates, peerHealth, excluded, now, peerLoad, peerUsage)
 }
 
-func keepAliveRecentUDPSuccesses(logger *logging.Logger, contentID string, selfUDPListenAddr string, now time.Time) {
+func keepAliveRecentUDPSuccesses(logger *logging.Logger, contentID string, trackerURL string, selfUDPListenAddr string, now time.Time) {
 	if strings.TrimSpace(selfUDPListenAddr) == "" {
 		return
 	}
@@ -236,6 +238,7 @@ func keepAliveRecentUDPSuccesses(logger *logging.Logger, contentID string, selfU
 		}
 		go func(remote string) {
 			if err := p2pnet.NewUDPClient(remote, 1200*time.Millisecond).WithLocalAddr(selfUDPListenAddr).Probe(); err != nil {
+				reportTrackerUDPKeepalive(logger, trackerURL, "udp://"+remote, contentID, false, udpDiscoveryErrorKind(err))
 				logger.Info("udp_success_keepalive_failed",
 					"contentId", contentID,
 					"remote", remote,
@@ -243,11 +246,27 @@ func keepAliveRecentUDPSuccesses(logger *logging.Logger, contentID string, selfU
 				)
 				return
 			}
+			reportTrackerUDPKeepalive(logger, trackerURL, "udp://"+remote, contentID, true, "")
 			logger.Info("udp_success_keepalive_sent",
 				"contentId", contentID,
 				"remote", remote,
 			)
 		}(remoteAddr)
+	}
+}
+
+func reportTrackerUDPKeepalive(logger *logging.Logger, trackerURL string, targetPeerID string, contentID string, success bool, errorKind string) {
+	if strings.TrimSpace(trackerURL) == "" || strings.TrimSpace(targetPeerID) == "" || strings.TrimSpace(contentID) == "" {
+		return
+	}
+	client := tracker.NewClient(trackerURL)
+	if err := client.ReportUDPKeepaliveResult(context.Background(), targetPeerID, contentID, success, errorKind); err != nil {
+		logger.Error("tracker_udp_keepalive_report_failed",
+			"contentId", contentID,
+			"targetPeerId", targetPeerID,
+			"tracker", trackerURL,
+			"error", err.Error(),
+		)
 	}
 }
 

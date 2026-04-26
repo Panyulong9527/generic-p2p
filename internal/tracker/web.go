@@ -760,6 +760,7 @@ const webAppHTML = `<!doctype html>
       const pendingUdpProbes = status.pendingUdpProbes || [];
       const udpProbeResults = status.udpProbeResults || [];
       const peerTransferPaths = status.peerTransferPaths || [];
+      const udpKeepaliveResults = status.udpKeepaliveResults || [];
       const udpProbeResultMap = Object.fromEntries(
         udpProbeResults.map((item) => [item.targetPeerId || "", item])
       );
@@ -813,6 +814,21 @@ const webAppHTML = `<!doctype html>
             ).join("") +
           '</div>'
         : '';
+      const udpKeepaliveHTML = udpKeepaliveResults.length
+        ? '<div class="subsection">' +
+            '<h3>UDP Keepalive Results</h3>' +
+            udpKeepaliveResults.map((item) =>
+              '<div class="swarm">' +
+                '<strong>' + escapeHTML(item.targetPeerId || "peer") + '</strong> ' + formatKeepaliveChip(item) + '<br>' +
+                'success ' + (item.successCount || 0) + ' / failure ' + (item.failureCount || 0) +
+                '<br>last success ' + formatTimestamp(item.lastSuccessAt) +
+                '<br>last failure ' + formatTimestamp(item.lastFailureAt) +
+                '<br>last error ' + escapeHTML(item.lastErrorKind || "-") +
+                '<br>content ' + escapeHTML(shortContentId(item.contentId || "-")) +
+              '</div>'
+            ).join("") +
+          '</div>'
+        : '';
 
       trackerStatusEl.innerHTML =
         '<div class="metric-row">' +
@@ -826,6 +842,11 @@ const webAppHTML = `<!doctype html>
           '<div class="metric"><strong>' + status.peerTtlSeconds + 's</strong><span>peer TTL</span></div>' +
         '</div>' +
         '<div class="metric-row">' +
+          '<div class="metric"><strong>' + (status.recentUdpKeepaliveSuccesses || 0) + '</strong><span>UDP keepalive success</span></div>' +
+          '<div class="metric"><strong>' + (status.recentUdpKeepaliveFailures || 0) + '</strong><span>UDP keepalive failure</span></div>' +
+          '<div class="metric"><strong>' + udpKeepaliveResults.length + '</strong><span>tracked warm paths</span></div>' +
+        '</div>' +
+        '<div class="metric-row">' +
           '<div class="metric"><strong>' + status.cleanupIntervalSeconds + 's</strong><span>cleanup interval</span></div>' +
           '<div class="metric"><strong>' + escapeHTML(status.statePath || "-") + '</strong><span>state file</span></div>' +
           '<div class="metric"><strong>' + peerTransferPaths.length + '</strong><span>tracked transfer peers</span></div>' +
@@ -837,6 +858,7 @@ const webAppHTML = `<!doctype html>
         '</div>' +
         pendingHTML +
         udpResultHTML +
+        udpKeepaliveHTML +
         swarmHTML;
     }
 
@@ -886,6 +908,25 @@ const webAppHTML = `<!doctype html>
           return '<span class="chip chip-timeout">udp timeout</span>';
         }
         return '<span class="chip chip-fail">' + escapeHTML(kind || "failure") + '</span>';
+      }
+      return '<span class="chip chip-idle">no result</span>';
+    }
+
+    function formatKeepaliveChip(item) {
+      if (!item) {
+        return '<span class="chip chip-idle">no result</span>';
+      }
+      const lastSuccess = item.lastSuccessAt || 0;
+      const lastFailure = item.lastFailureAt || 0;
+      if (lastSuccess > lastFailure) {
+        return '<span class="chip chip-ok">warm</span>';
+      }
+      if (lastFailure > 0) {
+        const kind = String(item.lastErrorKind || "").trim();
+        if (kind === "udp_timeout") {
+          return '<span class="chip chip-timeout">keepalive timeout</span>';
+        }
+        return '<span class="chip chip-fail">' + escapeHTML(kind || "keepalive fail") + '</span>';
       }
       return '<span class="chip chip-idle">no result</span>';
     }

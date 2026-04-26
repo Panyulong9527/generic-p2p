@@ -79,6 +79,13 @@ type ReportTransferPathRequest struct {
 	Transport    string `json:"transport"`
 }
 
+type ReportUDPKeepaliveResultRequest struct {
+	TargetPeerID string `json:"targetPeerId"`
+	ContentID    string `json:"contentId"`
+	Success      bool   `json:"success"`
+	ErrorKind    string `json:"errorKind,omitempty"`
+}
+
 type SwarmStatus struct {
 	ContentID string       `json:"contentId"`
 	PeerCount int          `json:"peerCount"`
@@ -110,20 +117,33 @@ type PeerTransferPathStatus struct {
 	TCPCount     int    `json:"tcpCount"`
 }
 
+type UDPKeepaliveStatus struct {
+	TargetPeerID  string `json:"targetPeerId"`
+	ContentID     string `json:"contentId,omitempty"`
+	SuccessCount  int    `json:"successCount"`
+	FailureCount  int    `json:"failureCount"`
+	LastSuccessAt int64  `json:"lastSuccessAt,omitempty"`
+	LastFailureAt int64  `json:"lastFailureAt,omitempty"`
+	LastErrorKind string `json:"lastErrorKind,omitempty"`
+}
+
 type StatusResponse struct {
-	GeneratedAt             string                   `json:"generatedAt"`
-	PeerCount               int                      `json:"peerCount"`
-	SwarmCount              int                      `json:"swarmCount"`
-	PendingUDPProbeCount    int                      `json:"pendingUdpProbeCount"`
-	RecentUDPProbeSuccesses int                      `json:"recentUdpProbeSuccesses"`
-	RecentUDPProbeFailures  int                      `json:"recentUdpProbeFailures"`
-	PeerTTLSeconds          int                      `json:"peerTtlSeconds"`
-	CleanupIntervalSeconds  int                      `json:"cleanupIntervalSeconds"`
-	StatePath               string                   `json:"statePath,omitempty"`
-	PendingUDPProbes        []PendingUDPProbeStatus  `json:"pendingUdpProbes,omitempty"`
-	UDPProbeResults         []UDPProbeResultStatus   `json:"udpProbeResults,omitempty"`
-	PeerTransferPaths       []PeerTransferPathStatus `json:"peerTransferPaths,omitempty"`
-	Swarms                  []SwarmStatus            `json:"swarms"`
+	GeneratedAt                 string                   `json:"generatedAt"`
+	PeerCount                   int                      `json:"peerCount"`
+	SwarmCount                  int                      `json:"swarmCount"`
+	PendingUDPProbeCount        int                      `json:"pendingUdpProbeCount"`
+	RecentUDPProbeSuccesses     int                      `json:"recentUdpProbeSuccesses"`
+	RecentUDPProbeFailures      int                      `json:"recentUdpProbeFailures"`
+	RecentUDPKeepaliveSuccesses int                      `json:"recentUdpKeepaliveSuccesses"`
+	RecentUDPKeepaliveFailures  int                      `json:"recentUdpKeepaliveFailures"`
+	PeerTTLSeconds              int                      `json:"peerTtlSeconds"`
+	CleanupIntervalSeconds      int                      `json:"cleanupIntervalSeconds"`
+	StatePath                   string                   `json:"statePath,omitempty"`
+	PendingUDPProbes            []PendingUDPProbeStatus  `json:"pendingUdpProbes,omitempty"`
+	UDPProbeResults             []UDPProbeResultStatus   `json:"udpProbeResults,omitempty"`
+	PeerTransferPaths           []PeerTransferPathStatus `json:"peerTransferPaths,omitempty"`
+	UDPKeepaliveResults         []UDPKeepaliveStatus     `json:"udpKeepaliveResults,omitempty"`
+	Swarms                      []SwarmStatus            `json:"swarms"`
 }
 
 type udpProbeResultSummary struct {
@@ -144,6 +164,15 @@ type peerTransferPathSummary struct {
 	TCPCount  int
 }
 
+type udpKeepaliveSummary struct {
+	ContentID     string
+	SuccessCount  int
+	FailureCount  int
+	LastSuccessAt int64
+	LastFailureAt int64
+	LastErrorKind string
+}
+
 type Server struct {
 	mu              sync.Mutex
 	peers           map[string]PeerRecord
@@ -151,6 +180,7 @@ type Server struct {
 	udpProbes       map[string][]UDPProbeTask
 	udpProbeResults map[string]udpProbeResultSummary
 	peerTransfers   map[string]peerTransferPathSummary
+	udpKeepalives   map[string]udpKeepaliveSummary
 	peerTTL         time.Duration
 	cleanupInterval time.Duration
 	statePath       string
@@ -167,6 +197,7 @@ func NewServer() *Server {
 		udpProbes:       make(map[string][]UDPProbeTask),
 		udpProbeResults: make(map[string]udpProbeResultSummary),
 		peerTransfers:   make(map[string]peerTransferPathSummary),
+		udpKeepalives:   make(map[string]udpKeepaliveSummary),
 		peerTTL:         10 * time.Second,
 		cleanupInterval: 2 * time.Second,
 		webDataDir:      defaultWebDataDir,
@@ -195,6 +226,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/udp/probes/request", s.handleRequestUDPProbe)
 	mux.HandleFunc("/v1/udp/probes/poll", s.handlePollUDPProbeRequests)
 	mux.HandleFunc("/v1/udp/probes/report", s.handleReportUDPProbeResult)
+	mux.HandleFunc("/v1/udp/keepalives/report", s.handleReportUDPKeepaliveResult)
 	mux.HandleFunc("/v1/transfers/report", s.handleReportTransferPath)
 	mux.HandleFunc("/v1/swarms/join", s.handleJoin)
 	mux.HandleFunc("/v1/swarms/", s.handleGetPeers)
@@ -492,6 +524,42 @@ func (s *Server) handleReportTransferPath(w http.ResponseWriter, r *http.Request
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
+func (s *Server) handleReportUDPKeepaliveResult(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req ReportUDPKeepaliveResultRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.TargetPeerID) == "" || strings.TrimSpace(req.ContentID) == "" {
+		http.Error(w, "targetPeerId and contentId are required", http.StatusBadRequest)
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneExpiredLocked(time.Now())
+
+	summary := s.udpKeepalives[req.TargetPeerID]
+	summary.ContentID = req.ContentID
+	if req.Success {
+		summary.SuccessCount++
+		summary.LastSuccessAt = time.Now().Unix()
+		summary.LastErrorKind = ""
+	} else {
+		summary.FailureCount++
+		summary.LastFailureAt = time.Now().Unix()
+		summary.LastErrorKind = req.ErrorKind
+	}
+	s.udpKeepalives[req.TargetPeerID] = summary
+
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
 func (s *Server) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(s.cleanupInterval)
 	defer ticker.Stop()
@@ -535,6 +603,7 @@ func (s *Server) Status() StatusResponse {
 		PendingUDPProbes:       make([]PendingUDPProbeStatus, 0, len(s.udpProbes)),
 		UDPProbeResults:        make([]UDPProbeResultStatus, 0, len(s.udpProbeResults)),
 		PeerTransferPaths:      make([]PeerTransferPathStatus, 0, len(s.peerTransfers)),
+		UDPKeepaliveResults:    make([]UDPKeepaliveStatus, 0, len(s.udpKeepalives)),
 		PeerTTLSeconds:         int(s.peerTTL / time.Second),
 		CleanupIntervalSeconds: int(s.cleanupInterval / time.Second),
 		StatePath:              s.statePath,
@@ -590,6 +659,19 @@ func (s *Server) Status() StatusResponse {
 			TCPCount:     summary.TCPCount,
 		})
 	}
+	for targetPeerID, summary := range s.udpKeepalives {
+		response.RecentUDPKeepaliveSuccesses += summary.SuccessCount
+		response.RecentUDPKeepaliveFailures += summary.FailureCount
+		response.UDPKeepaliveResults = append(response.UDPKeepaliveResults, UDPKeepaliveStatus{
+			TargetPeerID:  targetPeerID,
+			ContentID:     summary.ContentID,
+			SuccessCount:  summary.SuccessCount,
+			FailureCount:  summary.FailureCount,
+			LastSuccessAt: summary.LastSuccessAt,
+			LastFailureAt: summary.LastFailureAt,
+			LastErrorKind: summary.LastErrorKind,
+		})
+	}
 
 	return response
 }
@@ -612,6 +694,7 @@ func (s *Server) pruneExpiredLocked(now time.Time) {
 		delete(s.udpProbes, peerID)
 		delete(s.udpProbeResults, peerID)
 		delete(s.peerTransfers, peerID)
+		delete(s.udpKeepalives, peerID)
 		for contentID, peerSet := range s.swarms {
 			delete(peerSet, peerID)
 			if len(peerSet) == 0 {
@@ -844,6 +927,16 @@ func (c *Client) ReportTransferPath(ctx context.Context, targetPeerID string, co
 		Transport:    transport,
 	}
 	return c.postJSON(ctx, "/v1/transfers/report", reqBody, nil)
+}
+
+func (c *Client) ReportUDPKeepaliveResult(ctx context.Context, targetPeerID string, contentID string, success bool, errorKind string) error {
+	reqBody := ReportUDPKeepaliveResultRequest{
+		TargetPeerID: targetPeerID,
+		ContentID:    contentID,
+		Success:      success,
+		ErrorKind:    errorKind,
+	}
+	return c.postJSON(ctx, "/v1/udp/keepalives/report", reqBody, nil)
 }
 
 func (c *Client) GetStatus(ctx context.Context) (StatusResponse, error) {
