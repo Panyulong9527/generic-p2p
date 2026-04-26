@@ -120,6 +120,13 @@ var udpObservedPeers = struct {
 	entries: make(map[string]observedUDPPeer),
 }
 
+var udpKeepaliveState = struct {
+	mu      sync.Mutex
+	lastRun map[string]time.Time
+}{
+	lastRun: make(map[string]time.Time),
+}
+
 var udpSharedSockets = struct {
 	mu      sync.Mutex
 	entries map[string]*udpSharedSocket
@@ -435,6 +442,27 @@ func ObservedUDPPeer(contentID string, peerID string, maxAge time.Duration, now 
 		return "", time.Time{}, false
 	}
 	return entry.Addr, entry.SeenAt, true
+}
+
+func ShouldKeepAliveObservedUDPPeer(localAddr string, contentID string, peerID string, remoteAddr string, interval time.Duration, now time.Time) bool {
+	if strings.TrimSpace(localAddr) == "" || strings.TrimSpace(contentID) == "" || strings.TrimSpace(peerID) == "" || strings.TrimSpace(remoteAddr) == "" {
+		return false
+	}
+	if interval <= 0 {
+		return false
+	}
+	if _, ok := lookupUDPSharedSocket(localAddr); !ok {
+		return false
+	}
+	key := localAddr + "|" + contentID + "|" + peerID + "|" + remoteAddr
+	udpKeepaliveState.mu.Lock()
+	defer udpKeepaliveState.mu.Unlock()
+	lastRun, ok := udpKeepaliveState.lastRun[key]
+	if ok && now.Sub(lastRun) < interval {
+		return false
+	}
+	udpKeepaliveState.lastRun[key] = now
+	return true
 }
 
 func (c *UDPClient) FetchHave(contentID string) ([]core.HaveRange, error) {

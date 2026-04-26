@@ -124,6 +124,47 @@ func TestUDPClientCanReuseServerListenSocket(t *testing.T) {
 	}
 }
 
+func TestShouldKeepAliveObservedUDPPeerThrottlesRequests(t *testing.T) {
+	addr := freeUDPAddr(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server := NewUDPServer(addr, StaticContentSource{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Listen(ctx)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := lookupUDPSharedSocket(addr); ok {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	now := time.Unix(1000, 0)
+	if !ShouldKeepAliveObservedUDPPeer(addr, "content-a", "peer-a", "198.51.100.1:9003", 8*time.Second, now) {
+		t.Fatal("expected first keepalive decision to pass")
+	}
+	if ShouldKeepAliveObservedUDPPeer(addr, "content-a", "peer-a", "198.51.100.1:9003", 8*time.Second, now.Add(3*time.Second)) {
+		t.Fatal("expected keepalive decision to be throttled inside interval")
+	}
+	if !ShouldKeepAliveObservedUDPPeer(addr, "content-a", "peer-a", "198.51.100.1:9003", 8*time.Second, now.Add(9*time.Second)) {
+		t.Fatal("expected keepalive decision to pass after interval")
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("udp server did not stop")
+	}
+}
+
 func TestUDPClientProbeFailsWhenPeerUnavailable(t *testing.T) {
 	addr := freeUDPAddr(t)
 	client := NewUDPClient(addr, 50*time.Millisecond)

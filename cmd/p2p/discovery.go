@@ -85,6 +85,7 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 			pref.observedAt = seenAt
 			pref.trackerBias = maxFloat64(pref.trackerBias, probeBiases[peer.PeerID])
 			preferences[observedAddr] = pref
+			maybeKeepAliveUDPPath(logger, contentID, peer.PeerID, selfUDPListenAddr, observedAddr, now)
 		}
 		for _, addr := range peer.UDPAddrs {
 			if addr == "" || addr == selfUDPListenAddr {
@@ -112,9 +113,32 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 			pref := preferences[peer.ObservedUDPAddr]
 			pref.trackerBias = maxFloat64(pref.trackerBias, probeBiases[peer.PeerID])
 			preferences[peer.ObservedUDPAddr] = pref
+			maybeKeepAliveUDPPath(logger, contentID, peer.PeerID, selfUDPListenAddr, peer.ObservedUDPAddr, now)
 		}
 	}
 	return addrs, preferences, nil
+}
+
+func maybeKeepAliveUDPPath(logger *logging.Logger, contentID string, peerID string, selfUDPListenAddr string, remoteAddr string, now time.Time) {
+	if !p2pnet.ShouldKeepAliveObservedUDPPeer(selfUDPListenAddr, contentID, peerID, remoteAddr, 8*time.Second, now) {
+		return
+	}
+	go func() {
+		if err := p2pnet.NewUDPClient(remoteAddr, 1500*time.Millisecond).WithLocalAddr(selfUDPListenAddr).ProbeForPeer(contentID, peerID); err != nil {
+			logger.Info("udp_keepalive_failed",
+				"contentId", contentID,
+				"peerId", peerID,
+				"remote", remoteAddr,
+				"error", err.Error(),
+			)
+			return
+		}
+		logger.Info("udp_keepalive_sent",
+			"contentId", contentID,
+			"peerId", peerID,
+			"remote", remoteAddr,
+		)
+	}()
 }
 
 func collectPeerAddrs(peerAddr string, peerList string) []string {
