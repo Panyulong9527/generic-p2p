@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"generic-p2p/internal/core"
 	"generic-p2p/internal/scheduler"
@@ -106,5 +107,17 @@ func TestUDPAttemptBudgetVariesByBurstProfile(t *testing.T) {
 	}
 	if got := udpAttemptBudget(scheduler.PeerCandidate{Transport: "udp"}); got != 3 {
 		t.Fatalf("expected default budget 3, got %d", got)
+	}
+}
+
+func TestUDPPieceTimeoutVariesByBurstProfile(t *testing.T) {
+	if got := udpPieceTimeout(scheduler.PeerCandidate{Transport: "udp", BurstProfile: "warm"}); got != 3500*time.Millisecond {
+		t.Fatalf("expected warm timeout 3.5s, got %s", got)
+	}
+	if got := udpPieceTimeout(scheduler.PeerCandidate{Transport: "udp", BurstProfile: "aggressive"}); got != 5500*time.Millisecond {
+		t.Fatalf("expected aggressive timeout 5.5s, got %s", got)
+	}
+	if got := udpPieceTimeout(scheduler.PeerCandidate{Transport: "udp"}); got != 4500*time.Millisecond {
+		t.Fatalf("expected default timeout 4.5s, got %s", got)
 	}
 }

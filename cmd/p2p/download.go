@@ -208,7 +208,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 func fetchPieceFromCandidate(candidate scheduler.PeerCandidate, contentID string, pieceIndex int, selfUDPListenAddr string) ([]byte, error) {
 	switch candidate.Transport {
 	case "udp":
-		return p2pnet.NewUDPClient(candidate.Addr, 4*time.Second).WithLocalAddr(selfUDPListenAddr).FetchPiece(contentID, pieceIndex)
+		return p2pnet.NewUDPClient(candidate.Addr, udpPieceTimeout(candidate)).WithLocalAddr(selfUDPListenAddr).FetchPiece(contentID, pieceIndex)
 	default:
 		addr := candidate.Addr
 		if addr == "" {
@@ -271,6 +271,17 @@ func udpAttemptBudget(selected scheduler.PeerCandidate) int {
 		return 2
 	default:
 		return 3
+	}
+}
+
+func udpPieceTimeout(selected scheduler.PeerCandidate) time.Duration {
+	switch selected.BurstProfile {
+	case "aggressive":
+		return 5500 * time.Millisecond
+	case "warm":
+		return 3500 * time.Millisecond
+	default:
+		return 4500 * time.Millisecond
 	}
 }
 
