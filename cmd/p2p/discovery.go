@@ -707,7 +707,8 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 	}
 	for _, addr := range udpPeerAddrs {
 		peerID := "udp://" + addr
-		client := p2pnet.NewUDPClient(addr, 3*time.Second).WithLocalAddr(selfUDPListenAddr)
+		burstProfile := strings.TrimSpace(udpPreferences[addr].burstProfile)
+		probeClient := p2pnet.NewUDPClient(addr, udpProbeTimeoutForProfile(burstProfile)).WithLocalAddr(selfUDPListenAddr)
 		now := time.Now()
 		if ok, cached := udpProbes.Load(addr, now); cached {
 			if !ok {
@@ -715,7 +716,7 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 				continue
 			}
 		} else {
-			if err := client.Probe(); err != nil {
+			if err := probeClient.Probe(); err != nil {
 				udpProbes.Store(addr, false, now)
 				var cooldown time.Duration
 				if peerHealth != nil {
@@ -733,7 +734,8 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 			udpProbes.Store(addr, true, now)
 			logger.Info("udp_peer_probe_ok", "contentId", contentID, "peer", peerID)
 		}
-		haveRanges, err := client.FetchHave(contentID)
+		haveClient := p2pnet.NewUDPClient(addr, udpHaveTimeoutForProfile(burstProfile)).WithLocalAddr(selfUDPListenAddr)
+		haveRanges, err := haveClient.FetchHave(contentID)
 		if err != nil {
 			var cooldown time.Duration
 			errorKind := udpDiscoveryErrorKind(err)
@@ -759,7 +761,7 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 			Transport:    "udp",
 			IsLAN:        isLANAddr(addr),
 			Score:        udpCandidateScore(addr, udpPreferences, time.Now()),
-			BurstProfile: udpPreferences[addr].burstProfile,
+			BurstProfile: burstProfile,
 			HaveRanges:   haveRanges,
 		})
 	}
@@ -798,6 +800,28 @@ func udpCandidateScore(addr string, udpPreferences map[string]udpPeerPreference,
 	}
 	score += preference.trackerBias
 	return score
+}
+
+func udpProbeTimeoutForProfile(profile string) time.Duration {
+	switch strings.TrimSpace(profile) {
+	case "warm":
+		return 2200 * time.Millisecond
+	case "aggressive":
+		return 3800 * time.Millisecond
+	default:
+		return 3 * time.Second
+	}
+}
+
+func udpHaveTimeoutForProfile(profile string) time.Duration {
+	switch strings.TrimSpace(profile) {
+	case "warm":
+		return 2600 * time.Millisecond
+	case "aggressive":
+		return 4300 * time.Millisecond
+	default:
+		return 3400 * time.Millisecond
+	}
 }
 
 func filterPeerCandidates(logger *logging.Logger, contentID string, candidates []scheduler.PeerCandidate, peerHealth *peerHealthState, excluded map[string]bool, now time.Time, peerLoad *peerLoadState, peerUsage *peerUsageState) ([]scheduler.PeerCandidate, error) {

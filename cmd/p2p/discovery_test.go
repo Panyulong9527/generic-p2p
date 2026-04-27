@@ -32,6 +32,28 @@ func TestUDPCandidateScorePrefersFreshObservedAddresses(t *testing.T) {
 	}
 }
 
+func TestUDPDiscoveryTimeoutsVaryByBurstProfile(t *testing.T) {
+	if got := udpProbeTimeoutForProfile("warm"); got != 2200*time.Millisecond {
+		t.Fatalf("expected warm probe timeout 2.2s, got %s", got)
+	}
+	if got := udpProbeTimeoutForProfile("aggressive"); got != 3800*time.Millisecond {
+		t.Fatalf("expected aggressive probe timeout 3.8s, got %s", got)
+	}
+	if got := udpProbeTimeoutForProfile(""); got != 3*time.Second {
+		t.Fatalf("expected default probe timeout 3s, got %s", got)
+	}
+
+	if got := udpHaveTimeoutForProfile("warm"); got != 2600*time.Millisecond {
+		t.Fatalf("expected warm have timeout 2.6s, got %s", got)
+	}
+	if got := udpHaveTimeoutForProfile("aggressive"); got != 4300*time.Millisecond {
+		t.Fatalf("expected aggressive have timeout 4.3s, got %s", got)
+	}
+	if got := udpHaveTimeoutForProfile(""); got != 3400*time.Millisecond {
+		t.Fatalf("expected default have timeout 3.4s, got %s", got)
+	}
+}
+
 func TestTrackerUDPProbeBiasPrefersRecentSuccessAndPenalizesRecentFailure(t *testing.T) {
 	now := time.Unix(200, 0)
 
