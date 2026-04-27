@@ -71,6 +71,8 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 					"peerId", peer.PeerID,
 					"error", err.Error(),
 				)
+			} else {
+				maybeRequesterSideBurstPunch(logger, contentID, peer, selfUDPListenAddr)
 			}
 		}
 		if observedAddr, seenAt, ok := p2pnet.ObservedUDPPeer(contentID, peer.PeerID, 30*time.Second, now); ok && observedAddr != selfUDPListenAddr {
@@ -117,6 +119,58 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 		}
 	}
 	return addrs, preferences, nil
+}
+
+func maybeRequesterSideBurstPunch(logger *logging.Logger, contentID string, peer tracker.PeerRecord, selfUDPListenAddr string) {
+	if strings.TrimSpace(selfUDPListenAddr) == "" || strings.TrimSpace(peer.PeerID) == "" {
+		return
+	}
+	targets := requesterSideBurstPunchTargets(peer, selfUDPListenAddr)
+	if len(targets) == 0 {
+		return
+	}
+	go func() {
+		for _, target := range targets {
+			if err := p2pnet.NewUDPClient(target, 1500*time.Millisecond).
+				WithLocalAddr(selfUDPListenAddr).
+				ProbeBurstForPeer(contentID, peer.PeerID, 3, 80*time.Millisecond); err != nil {
+				logger.Info("tracker_udp_requester_burst_probe_failed",
+					"contentId", contentID,
+					"peerId", peer.PeerID,
+					"remote", target,
+					"error", err.Error(),
+				)
+				continue
+			}
+			logger.Info("tracker_udp_requester_burst_probe_sent",
+				"contentId", contentID,
+				"peerId", peer.PeerID,
+				"remote", target,
+			)
+		}
+	}()
+}
+
+func requesterSideBurstPunchTargets(peer tracker.PeerRecord, selfUDPListenAddr string) []string {
+	targets := make([]string, 0, len(peer.UDPAddrs)+1)
+	appendTarget := func(addr string) {
+		addr = strings.TrimSpace(addr)
+		if addr == "" || addr == selfUDPListenAddr {
+			return
+		}
+		for _, existing := range targets {
+			if existing == addr {
+				return
+			}
+		}
+		targets = append(targets, addr)
+	}
+
+	appendTarget(peer.ObservedUDPAddr)
+	for _, addr := range peer.UDPAddrs {
+		appendTarget(addr)
+	}
+	return targets
 }
 
 func maybeKeepAliveUDPPath(logger *logging.Logger, contentID string, peerID string, trackerURL string, selfUDPListenAddr string, remoteAddr string, now time.Time) {

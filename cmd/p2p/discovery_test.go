@@ -2,6 +2,7 @@ package main
 
 import (
 	"math"
+	"reflect"
 	"testing"
 	"time"
 
@@ -265,5 +266,47 @@ func TestBuildTrackerUDPPeerBiasesAddsFallbackPenaltyForTcpMissAndKeepaliveFailu
 	biases := buildTrackerUDPPeerBiases(status, "sha256-demo", now)
 	if got := biases["peer-a"]; math.Abs(got-(-0.31)) > 1e-9 {
 		t.Fatalf("expected combined fallback bias -0.31, got %.2f", got)
+	}
+}
+
+func TestRequesterSideBurstPunchTargetsPrefersObservedAndDeduplicates(t *testing.T) {
+	peer := tracker.PeerRecord{
+		PeerID:          "peer-a",
+		ObservedUDPAddr: "198.51.100.10:9003",
+		UDPAddrs: []string{
+			"198.51.100.10:9003",
+			"198.51.100.11:9003",
+			"198.51.100.11:9003",
+			"",
+			"198.51.100.12:9003",
+		},
+	}
+
+	got := requesterSideBurstPunchTargets(peer, "198.51.100.12:9003")
+	want := []string{
+		"198.51.100.10:9003",
+		"198.51.100.11:9003",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected burst punch targets %v, got %v", want, got)
+	}
+}
+
+func TestRequesterSideBurstPunchTargetsFallsBackToDeclaredUDPAddrs(t *testing.T) {
+	peer := tracker.PeerRecord{
+		PeerID: "peer-b",
+		UDPAddrs: []string{
+			"198.51.100.20:9003",
+			"198.51.100.21:9003",
+		},
+	}
+
+	got := requesterSideBurstPunchTargets(peer, "198.51.100.99:9003")
+	want := []string{
+		"198.51.100.20:9003",
+		"198.51.100.21:9003",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected declared udp addrs %v, got %v", want, got)
 	}
 }
