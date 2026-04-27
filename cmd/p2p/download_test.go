@@ -71,3 +71,40 @@ func TestPieceAttemptCandidatesReturnsOnlySelectedForTCP(t *testing.T) {
 		t.Fatalf("unexpected attempt candidates: %+v", attempts)
 	}
 }
+
+func TestPieceAttemptCandidatesAllowsMoreAlternativesForAggressiveBurstProfile(t *testing.T) {
+	selected := scheduler.PeerCandidate{
+		PeerID:       "udp://selected-aggressive",
+		Transport:    "udp",
+		BurstProfile: "aggressive",
+		Score:        1.4,
+		HaveRanges:   []core.HaveRange{{Start: 0, End: 5}},
+	}
+	peers := []scheduler.PeerCandidate{
+		selected,
+		{PeerID: "udp://alt-1", Transport: "udp", Score: 1.3, HaveRanges: []core.HaveRange{{Start: 0, End: 5}}},
+		{PeerID: "udp://alt-2", Transport: "udp", Score: 1.2, HaveRanges: []core.HaveRange{{Start: 0, End: 5}}},
+		{PeerID: "udp://alt-3", Transport: "udp", Score: 1.1, HaveRanges: []core.HaveRange{{Start: 0, End: 5}}},
+		{PeerID: "udp://alt-4", Transport: "udp", Score: 1.0, HaveRanges: []core.HaveRange{{Start: 0, End: 5}}},
+	}
+
+	attempts := pieceAttemptCandidates(2, selected, peers)
+	if len(attempts) != 4 {
+		t.Fatalf("expected 4 attempt candidates for aggressive burst profile, got %d", len(attempts))
+	}
+	if attempts[3].PeerID != "udp://alt-3" {
+		t.Fatalf("expected third alternative to be included for aggressive profile, got %+v", attempts)
+	}
+}
+
+func TestUDPAttemptBudgetVariesByBurstProfile(t *testing.T) {
+	if got := udpAttemptBudget(scheduler.PeerCandidate{Transport: "udp", BurstProfile: "warm"}); got != 2 {
+		t.Fatalf("expected warm budget 2, got %d", got)
+	}
+	if got := udpAttemptBudget(scheduler.PeerCandidate{Transport: "udp", BurstProfile: "aggressive"}); got != 4 {
+		t.Fatalf("expected aggressive budget 4, got %d", got)
+	}
+	if got := udpAttemptBudget(scheduler.PeerCandidate{Transport: "udp"}); got != 3 {
+		t.Fatalf("expected default budget 3, got %d", got)
+	}
+}

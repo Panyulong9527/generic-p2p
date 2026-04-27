@@ -8,6 +8,7 @@ type PeerCandidate struct {
 	Transport    string
 	IsLAN        bool
 	Score        float64
+	BurstProfile string
 	HaveRanges   []core.HaveRange
 	PendingCount int
 }

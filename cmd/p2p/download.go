@@ -253,10 +253,25 @@ func pieceAttemptCandidates(pieceIndex int, selected scheduler.PeerCandidate, pe
 		}
 		return alternatives[i].PeerID < alternatives[j].PeerID
 	})
-	if len(alternatives) > 2 {
-		alternatives = alternatives[:2]
+	maxAlternatives := udpAttemptBudget(selected) - 1
+	if maxAlternatives < 0 {
+		maxAlternatives = 0
+	}
+	if len(alternatives) > maxAlternatives {
+		alternatives = alternatives[:maxAlternatives]
 	}
 	return append(attempts, alternatives...)
+}
+
+func udpAttemptBudget(selected scheduler.PeerCandidate) int {
+	switch selected.BurstProfile {
+	case "aggressive":
+		return 4
+	case "warm":
+		return 2
+	default:
+		return 3
+	}
 }
 
 func recordSelectionDecision(store *core.PieceStore, pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) {

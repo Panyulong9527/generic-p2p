@@ -270,6 +270,46 @@ func TestBuildTrackerUDPPeerBiasesAddsFallbackPenaltyForTcpMissAndKeepaliveFailu
 	}
 }
 
+func TestBuildTrackerUDPPeerBiasesIncludesBurstProfileBias(t *testing.T) {
+	now := time.Unix(750, 0)
+	status := tracker.StatusResponse{
+		UDPBurstProfiles: []tracker.UDPBurstProfileStatus{
+			{
+				TargetPeerID:   "peer-a",
+				ContentID:      "sha256-demo",
+				Profile:        "warm",
+				LastOutcome:    "success",
+				LastReportedAt: now.Add(-5 * time.Second).Unix(),
+			},
+			{
+				TargetPeerID:   "peer-b",
+				ContentID:      "sha256-demo",
+				Profile:        "aggressive",
+				LastOutcome:    "failure",
+				FailureCount:   2,
+				LastReportedAt: now.Add(-6 * time.Second).Unix(),
+			},
+		},
+		Swarms: []tracker.SwarmStatus{
+			{
+				ContentID: "sha256-demo",
+				Peers: []tracker.PeerRecord{
+					{PeerID: "peer-a", UDPAddrs: []string{"198.51.100.1:9003"}},
+					{PeerID: "peer-b", UDPAddrs: []string{"198.51.100.2:9003"}},
+				},
+			},
+		},
+	}
+
+	biases := buildTrackerUDPPeerBiases(status, "sha256-demo", now)
+	if got := biases["peer-a"]; math.Abs(got-0.08) > 1e-9 {
+		t.Fatalf("expected warm burst bias 0.08, got %.2f", got)
+	}
+	if got := biases["peer-b"]; math.Abs(got-(-0.08)) > 1e-9 {
+		t.Fatalf("expected aggressive burst bias -0.08, got %.2f", got)
+	}
+}
+
 func TestRequesterSideBurstPunchTargetsPrefersObservedAndDeduplicates(t *testing.T) {
 	peer := tracker.PeerRecord{
 		PeerID:          "peer-a",

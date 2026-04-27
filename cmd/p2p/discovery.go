@@ -16,8 +16,9 @@ import (
 )
 
 type udpPeerPreference struct {
-	observedAt  time.Time
-	trackerBias float64
+	observedAt   time.Time
+	trackerBias  float64
+	burstProfile string
 }
 
 type udpBurstProfileStats struct {
@@ -82,6 +83,7 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 	preferences := make(map[string]udpPeerPreference)
 	for _, peer := range peers {
 		now := time.Now()
+		_, _, _, burstProfile := trackerPeerUDPState(status, contentID, peer)
 		probeRequestKey := contentID + "|" + selfPeerID + "|" + selfUDPListenAddr + "|" + peer.PeerID
 		if selfPeerID != "" && selfUDPListenAddr != "" && peer.PeerID != "" && peer.PeerID != selfPeerID && udpProbeRequests.ShouldRequest(probeRequestKey, now) {
 			if err := client.RequestUDPProbe(context.Background(), contentID, selfPeerID, selfUDPListenAddr, peer.PeerID); err != nil {
@@ -105,6 +107,7 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 			pref := preferences[observedAddr]
 			pref.observedAt = seenAt
 			pref.trackerBias = maxFloat64(pref.trackerBias, probeBiases[peer.PeerID])
+			pref.burstProfile = strings.TrimSpace(burstProfile.Profile)
 			preferences[observedAddr] = pref
 			maybeKeepAliveUDPPath(logger, contentID, peer.PeerID, trackerURL, selfUDPListenAddr, observedAddr, now)
 		}
@@ -121,6 +124,7 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 			addrs = append(addrs, addr)
 			pref := preferences[addr]
 			pref.trackerBias = maxFloat64(pref.trackerBias, probeBiases[peer.PeerID])
+			pref.burstProfile = strings.TrimSpace(burstProfile.Profile)
 			preferences[addr] = pref
 		}
 		if peer.ObservedUDPAddr != "" && peer.ObservedUDPAddr != selfUDPListenAddr {
@@ -133,6 +137,7 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 			addrs = append(addrs, peer.ObservedUDPAddr)
 			pref := preferences[peer.ObservedUDPAddr]
 			pref.trackerBias = maxFloat64(pref.trackerBias, probeBiases[peer.PeerID])
+			pref.burstProfile = strings.TrimSpace(burstProfile.Profile)
 			preferences[peer.ObservedUDPAddr] = pref
 			maybeKeepAliveUDPPath(logger, contentID, peer.PeerID, trackerURL, selfUDPListenAddr, peer.ObservedUDPAddr, now)
 		}
@@ -468,6 +473,26 @@ func trackerBurstProfileIsWarm(item tracker.UDPBurstProfileStatus, now time.Time
 	return now.Sub(time.Unix(item.LastReportedAt, 0)) <= 45*time.Second
 }
 
+func trackerBurstProfileBias(item tracker.UDPBurstProfileStatus, now time.Time) float64 {
+	if item.LastReportedAt == 0 {
+		return 0
+	}
+	if now.Sub(time.Unix(item.LastReportedAt, 0)) > 45*time.Second {
+		return 0
+	}
+	switch strings.TrimSpace(item.Profile) {
+	case "warm":
+		return 0.08
+	case "aggressive":
+		if strings.TrimSpace(item.LastOutcome) == "failure" {
+			return -0.08
+		}
+		return -0.04
+	default:
+		return 0
+	}
+}
+
 func phasesForBurstProfile(profile string) []p2pnet.UDPBurstPhase {
 	switch strings.TrimSpace(profile) {
 	case "warm":
@@ -729,12 +754,13 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 		}
 		logger.Info("udp_peer_have_received", "contentId", contentID, "peer", peerID, "ranges", haveRanges)
 		candidates = append(candidates, scheduler.PeerCandidate{
-			PeerID:     peerID,
-			Addr:       addr,
-			Transport:  "udp",
-			IsLAN:      isLANAddr(addr),
-			Score:      udpCandidateScore(addr, udpPreferences, time.Now()),
-			HaveRanges: haveRanges,
+			PeerID:       peerID,
+			Addr:         addr,
+			Transport:    "udp",
+			IsLAN:        isLANAddr(addr),
+			Score:        udpCandidateScore(addr, udpPreferences, time.Now()),
+			BurstProfile: udpPreferences[addr].burstProfile,
+			HaveRanges:   haveRanges,
 		})
 	}
 	if len(candidates) == 0 {
@@ -841,8 +867,11 @@ func buildTrackerUDPPeerBiases(status tracker.StatusResponse, contentID string, 
 		for _, peer := range swarm.Peers {
 			transferBias := trackerTransferPathBias(peer, probeResults[peer.PeerID], transferPaths[peer.PeerID], now)
 			keepaliveBias := trackerPeerUDPKeepaliveBias(peer, keepaliveResults, now)
-			fallbackBias := trackerUDPFallbackBias(transferPaths[peer.PeerID], peerKeepaliveResult(peer, keepaliveResults), now)
-			biases[peer.PeerID] += transferBias + keepaliveBias + fallbackBias
+			keepaliveResult := peerKeepaliveResult(peer, keepaliveResults)
+			fallbackBias := trackerUDPFallbackBias(transferPaths[peer.PeerID], keepaliveResult, now)
+			_, _, _, burstProfile := trackerPeerUDPState(status, contentID, peer)
+			burstBias := trackerBurstProfileBias(burstProfile, now)
+			biases[peer.PeerID] += transferBias + keepaliveBias + fallbackBias + burstBias
 		}
 	}
 	return biases
