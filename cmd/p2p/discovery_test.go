@@ -402,3 +402,32 @@ func TestAdaptiveResponderBurstPhasesUsesAggressiveProfileWithoutObservedAddr(t 
 		t.Fatalf("expected aggressive responder burst phases %v, got %v", want, got)
 	}
 }
+
+func TestLearnedUDPBurstPhasesReusesRecentSuccessfulProfile(t *testing.T) {
+	now := time.Unix(1300, 0)
+	recordUDPBurstOutcome("sha256-demo", "peer-f", "warm", true, now.Add(-5*time.Second))
+
+	got, ok := learnedUDPBurstPhases("sha256-demo", "peer-f", now)
+	if !ok {
+		t.Fatal("expected learned burst phases to exist after recent success")
+	}
+	want := warmUDPBurstPhases()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected learned warm burst phases %v, got %v", want, got)
+	}
+}
+
+func TestLearnedUDPBurstPhasesEscalatesAfterRepeatedRecentFailures(t *testing.T) {
+	now := time.Unix(1400, 0)
+	recordUDPBurstOutcome("sha256-demo", "peer-g", "default", false, now.Add(-8*time.Second))
+	recordUDPBurstOutcome("sha256-demo", "peer-g", "default", false, now.Add(-3*time.Second))
+
+	got, ok := learnedUDPBurstPhases("sha256-demo", "peer-g", now)
+	if !ok {
+		t.Fatal("expected learned burst phases to exist after repeated recent failures")
+	}
+	want := aggressiveUDPBurstPhases()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected escalated aggressive burst phases %v, got %v", want, got)
+	}
+}
