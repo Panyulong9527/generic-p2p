@@ -469,11 +469,11 @@ func buildTrackerUDPPeerBiases(status tracker.StatusResponse, contentID string, 
 			continue
 		}
 		for _, peer := range swarm.Peers {
-			biases[peer.PeerID] += trackerTransferPathBias(peer, probeResults[peer.PeerID], transferPaths[peer.PeerID], now)
+			transferBias := trackerTransferPathBias(peer, probeResults[peer.PeerID], transferPaths[peer.PeerID], now)
+			keepaliveBias := trackerPeerUDPKeepaliveBias(peer, keepaliveResults, now)
+			fallbackBias := trackerUDPFallbackBias(transferPaths[peer.PeerID], peerKeepaliveResult(peer, keepaliveResults), now)
+			biases[peer.PeerID] += transferBias + keepaliveBias + fallbackBias
 		}
-	}
-	for peerID, result := range keepaliveResults {
-		biases[peerID] += trackerUDPKeepaliveBias(result, now)
 	}
 	return biases
 }
@@ -578,6 +578,78 @@ func trackerUDPKeepaliveFailurePenalty(errorKind string) float64 {
 		return -0.18
 	default:
 		return -0.18
+	}
+}
+
+func trackerPeerUDPKeepaliveBias(peer tracker.PeerRecord, keepaliveResults map[string]tracker.UDPKeepaliveStatus, now time.Time) float64 {
+	result := peerKeepaliveResult(peer, keepaliveResults)
+	if result.TargetPeerID == "" {
+		return 0
+	}
+	return trackerUDPKeepaliveBias(result, now)
+}
+
+func peerKeepaliveResult(peer tracker.PeerRecord, keepaliveResults map[string]tracker.UDPKeepaliveStatus) tracker.UDPKeepaliveStatus {
+	best := tracker.UDPKeepaliveStatus{}
+	for _, key := range peerKeepaliveKeys(peer) {
+		result, ok := keepaliveResults[key]
+		if !ok {
+			continue
+		}
+		if trackerUDPKeepaliveRecency(result) > trackerUDPKeepaliveRecency(best) {
+			best = result
+		}
+	}
+	return best
+}
+
+func peerKeepaliveKeys(peer tracker.PeerRecord) []string {
+	keys := make([]string, 0, len(peer.UDPAddrs)+1)
+	if peer.ObservedUDPAddr != "" {
+		keys = append(keys, "udp://"+peer.ObservedUDPAddr)
+	}
+	for _, addr := range peer.UDPAddrs {
+		if strings.TrimSpace(addr) == "" {
+			continue
+		}
+		key := "udp://" + addr
+		duplicate := false
+		for _, existing := range keys {
+			if existing == key {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+func trackerUDPKeepaliveRecency(result tracker.UDPKeepaliveStatus) int64 {
+	if result.LastSuccessAt > result.LastFailureAt {
+		return result.LastSuccessAt
+	}
+	return result.LastFailureAt
+}
+
+func trackerUDPFallbackBias(transferPath tracker.PeerTransferPathStatus, keepaliveResult tracker.UDPKeepaliveStatus, now time.Time) float64 {
+	if strings.TrimSpace(transferPath.LastPath) != "tcp" || transferPath.LastAt == 0 {
+		return 0
+	}
+	if keepaliveResult.LastFailureAt == 0 || keepaliveResult.LastFailureAt < keepaliveResult.LastSuccessAt {
+		return 0
+	}
+	transferAge := now.Sub(time.Unix(transferPath.LastAt, 0))
+	keepaliveAge := now.Sub(time.Unix(keepaliveResult.LastFailureAt, 0))
+	switch {
+	case transferAge <= 12*time.Second && keepaliveAge <= 12*time.Second:
+		return -0.16
+	case transferAge <= 30*time.Second && keepaliveAge <= 30*time.Second:
+		return -0.08
+	default:
+		return 0
 	}
 }
 

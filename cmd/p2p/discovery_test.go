@@ -202,16 +202,68 @@ func TestBuildTrackerUDPPeerBiasesIncludesKeepaliveBias(t *testing.T) {
 				LastErrorKind: "generic",
 			},
 		},
+		Swarms: []tracker.SwarmStatus{
+			{
+				ContentID: "sha256-demo",
+				Peers: []tracker.PeerRecord{
+					{PeerID: "peer-a", UDPAddrs: []string{"198.51.100.1:9003"}},
+					{PeerID: "peer-b", UDPAddrs: []string{"198.51.100.2:9003"}},
+				},
+			},
+		},
 	}
 
 	biases := buildTrackerUDPPeerBiases(status, "sha256-demo", now)
-	if got := biases["udp://198.51.100.1:9003"]; math.Abs(got-0.10) > 1e-9 {
-		t.Fatalf("expected keepalive success bias 0.10, got %.2f", got)
+	if got := biases["peer-a"]; math.Abs(got-0.10) > 1e-9 {
+		t.Fatalf("expected keepalive success bias 0.10 on peer-a, got %.2f", got)
 	}
-	if got := biases["udp://198.51.100.2:9003"]; math.Abs(got-(-0.12)) > 1e-9 {
-		t.Fatalf("expected keepalive timeout bias -0.12, got %.2f", got)
+	if got := biases["peer-b"]; math.Abs(got-(-0.12)) > 1e-9 {
+		t.Fatalf("expected keepalive timeout bias -0.12 on peer-b, got %.2f", got)
 	}
-	if got := biases["udp://198.51.100.3:9003"]; math.Abs(got) > 1e-9 {
-		t.Fatalf("expected other-content keepalive bias ignored, got %.2f", got)
+	if got := biases["peer-c"]; math.Abs(got) > 1e-9 {
+		t.Fatalf("expected missing peer keepalive bias ignored, got %.2f", got)
+	}
+}
+
+func TestBuildTrackerUDPPeerBiasesAddsFallbackPenaltyForTcpMissAndKeepaliveFailure(t *testing.T) {
+	now := time.Unix(700, 0)
+	status := tracker.StatusResponse{
+		UDPProbeResults: []tracker.UDPProbeResultStatus{
+			{
+				TargetPeerID:  "peer-a",
+				LastSuccessAt: now.Add(-6 * time.Second).Unix(),
+			},
+		},
+		PeerTransferPaths: []tracker.PeerTransferPathStatus{
+			{
+				TargetPeerID: "peer-a",
+				ContentID:    "sha256-demo",
+				LastPath:     "tcp",
+				LastAt:       now.Add(-5 * time.Second).Unix(),
+				TCPCount:     4,
+			},
+		},
+		UDPKeepaliveResults: []tracker.UDPKeepaliveStatus{
+			{
+				TargetPeerID:  "udp://198.51.100.1:9003",
+				ContentID:     "sha256-demo",
+				FailureCount:  2,
+				LastFailureAt: now.Add(-4 * time.Second).Unix(),
+				LastErrorKind: "udp_timeout",
+			},
+		},
+		Swarms: []tracker.SwarmStatus{
+			{
+				ContentID: "sha256-demo",
+				Peers: []tracker.PeerRecord{
+					{PeerID: "peer-a", UDPAddrs: []string{"198.51.100.1:9003"}},
+				},
+			},
+		},
+	}
+
+	biases := buildTrackerUDPPeerBiases(status, "sha256-demo", now)
+	if got := biases["peer-a"]; math.Abs(got-(-0.31)) > 1e-9 {
+		t.Fatalf("expected combined fallback bias -0.31, got %.2f", got)
 	}
 }
