@@ -373,6 +373,51 @@ func TestAdaptiveRequesterBurstPhasesUsesDefaultProfileWithoutRecentSignals(t *t
 	}
 }
 
+func TestAdaptiveRequesterBurstPhasesUsesTrackerWarmBurstProfile(t *testing.T) {
+	now := time.Unix(1050, 0)
+	peer := tracker.PeerRecord{PeerID: "peer-tracker-warm", UDPAddrs: []string{"198.51.100.30:9003"}}
+	status := tracker.StatusResponse{
+		UDPBurstProfiles: []tracker.UDPBurstProfileStatus{
+			{
+				TargetPeerID:   "peer-tracker-warm",
+				ContentID:      "sha256-demo",
+				Profile:        "warm",
+				LastOutcome:    "success",
+				LastReportedAt: now.Add(-8 * time.Second).Unix(),
+			},
+		},
+	}
+
+	got := adaptiveRequesterBurstPhases(peer, "sha256-demo", status, now)
+	want := warmUDPBurstPhases()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected tracker-driven warm burst phases %v, got %v", want, got)
+	}
+}
+
+func TestAdaptiveRequesterBurstPhasesUsesTrackerAggressiveBurstProfile(t *testing.T) {
+	now := time.Unix(1075, 0)
+	peer := tracker.PeerRecord{PeerID: "peer-tracker-aggressive", UDPAddrs: []string{"198.51.100.31:9003"}}
+	status := tracker.StatusResponse{
+		UDPBurstProfiles: []tracker.UDPBurstProfileStatus{
+			{
+				TargetPeerID:   "peer-tracker-aggressive",
+				ContentID:      "sha256-demo",
+				Profile:        "aggressive",
+				LastOutcome:    "failure",
+				FailureCount:   3,
+				LastReportedAt: now.Add(-6 * time.Second).Unix(),
+			},
+		},
+	}
+
+	got := adaptiveRequesterBurstPhases(peer, "sha256-demo", status, now)
+	want := aggressiveUDPBurstPhases()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected tracker-driven aggressive burst phases %v, got %v", want, got)
+	}
+}
+
 func TestAdaptiveResponderBurstPhasesUsesWarmProfileForRecentRequesterObservation(t *testing.T) {
 	now := time.Unix(1100, 0)
 	p2pnet.RememberObservedUDPPeer("sha256-demo", "peer-d", "198.51.100.4:9003", now.Add(-4*time.Second))

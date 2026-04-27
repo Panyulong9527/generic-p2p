@@ -239,7 +239,13 @@ func adaptiveRequesterBurstPhases(peer tracker.PeerRecord, contentID string, sta
 	if learned, ok := learnedUDPBurstPhases(contentID, peer.PeerID, now); ok {
 		return learned
 	}
-	probeResult, transferPath, keepaliveResult := trackerPeerUDPState(status, contentID, peer)
+	probeResult, transferPath, keepaliveResult, burstProfile := trackerPeerUDPState(status, contentID, peer)
+	if trackerBurstProfileNeedsAggressive(burstProfile, now) {
+		return aggressiveUDPBurstPhases()
+	}
+	if trackerBurstProfileIsWarm(burstProfile, now) {
+		return warmUDPBurstPhases()
+	}
 	if trackerPeerNeedsAggressiveBurst(peer, probeResult, transferPath, keepaliveResult, now) {
 		return aggressiveUDPBurstPhases()
 	}
@@ -299,7 +305,7 @@ func trackerPeerNeedsAggressiveBurst(peer tracker.PeerRecord, probeResult tracke
 	return false
 }
 
-func trackerPeerUDPState(status tracker.StatusResponse, contentID string, peer tracker.PeerRecord) (tracker.UDPProbeResultStatus, tracker.PeerTransferPathStatus, tracker.UDPKeepaliveStatus) {
+func trackerPeerUDPState(status tracker.StatusResponse, contentID string, peer tracker.PeerRecord) (tracker.UDPProbeResultStatus, tracker.PeerTransferPathStatus, tracker.UDPKeepaliveStatus, tracker.UDPBurstProfileStatus) {
 	var probeResult tracker.UDPProbeResultStatus
 	for _, item := range status.UDPProbeResults {
 		if item.TargetPeerID == peer.PeerID {
@@ -321,7 +327,18 @@ func trackerPeerUDPState(status tracker.StatusResponse, contentID string, peer t
 		}
 		keepaliveResults[item.TargetPeerID] = item
 	}
-	return probeResult, transferPath, peerKeepaliveResult(peer, keepaliveResults)
+	var burstProfile tracker.UDPBurstProfileStatus
+	for _, item := range status.UDPBurstProfiles {
+		if item.TargetPeerID != peer.PeerID {
+			continue
+		}
+		if strings.TrimSpace(item.ContentID) != "" && item.ContentID != contentID {
+			continue
+		}
+		burstProfile = item
+		break
+	}
+	return probeResult, transferPath, peerKeepaliveResult(peer, keepaliveResults), burstProfile
 }
 
 func udpBurstProfileName(phases []p2pnet.UDPBurstPhase) string {
@@ -429,6 +446,26 @@ func currentUDPBurstProfiles(contentID string, now time.Time) []core.UDPBurstPro
 		return profiles[i].PeerID < profiles[j].PeerID
 	})
 	return profiles
+}
+
+func trackerBurstProfileNeedsAggressive(item tracker.UDPBurstProfileStatus, now time.Time) bool {
+	if strings.TrimSpace(item.Profile) != "aggressive" || item.LastReportedAt == 0 {
+		return false
+	}
+	if now.Sub(time.Unix(item.LastReportedAt, 0)) > 45*time.Second {
+		return false
+	}
+	return true
+}
+
+func trackerBurstProfileIsWarm(item tracker.UDPBurstProfileStatus, now time.Time) bool {
+	if strings.TrimSpace(item.Profile) != "warm" || item.LastReportedAt == 0 {
+		return false
+	}
+	if strings.TrimSpace(item.LastOutcome) == "failure" {
+		return false
+	}
+	return now.Sub(time.Unix(item.LastReportedAt, 0)) <= 45*time.Second
 }
 
 func phasesForBurstProfile(profile string) []p2pnet.UDPBurstPhase {
