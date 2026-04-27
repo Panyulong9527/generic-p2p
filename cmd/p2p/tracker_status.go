@@ -75,8 +75,9 @@ func watchTrackerStatus(trackerURL string, interval time.Duration, pretty bool, 
 
 func printPrettyTrackerStatus(status tracker.StatusResponse) {
 	udpMiss, udpRecovered, aligned := summarizeTrackerRouteDrift(status)
+	fallbackActive := summarizeTrackerFallbackActive(status)
 	fmt.Printf(
-		"tracker peers=%d swarms=%d pendingUdpProbes=%d udpProbeSuccess=%d udpProbeFailure=%d udpKeepaliveSuccess=%d udpKeepaliveFailure=%d udpMiss=%d udpRecovered=%d routeAligned=%d peerTTL=%ds cleanup=%ds\n",
+		"tracker peers=%d swarms=%d pendingUdpProbes=%d udpProbeSuccess=%d udpProbeFailure=%d udpKeepaliveSuccess=%d udpKeepaliveFailure=%d udpMiss=%d udpRecovered=%d routeAligned=%d udpFallbackActive=%d peerTTL=%ds cleanup=%ds\n",
 		status.PeerCount,
 		status.SwarmCount,
 		status.PendingUDPProbeCount,
@@ -87,6 +88,7 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 		udpMiss,
 		udpRecovered,
 		aligned,
+		fallbackActive,
 		status.PeerTTLSeconds,
 		status.CleanupIntervalSeconds,
 	)
@@ -198,16 +200,22 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 	for _, item := range status.PeerTransferPaths {
 		peerTransferPaths[item.TargetPeerID] = item
 	}
+	udpKeepaliveResults := make(map[string]tracker.UDPKeepaliveStatus, len(status.UDPKeepaliveResults))
+	for _, item := range status.UDPKeepaliveResults {
+		udpKeepaliveResults[item.TargetPeerID] = item
+	}
 	for _, swarm := range swarms {
 		swarmMiss, swarmRecovered, swarmAligned := summarizeSwarmRouteDrift(swarm, udpProbeResults, peerTransferPaths)
 		offenders := summarizeSwarmOffenders(swarm, udpProbeResults, peerTransferPaths)
+		swarmFallbackActive := summarizeSwarmFallbackActive(swarm, udpProbeResults, peerTransferPaths, udpKeepaliveResults)
 		fmt.Printf(
-			"  %s peers=%d udpMiss=%d udpRecovered=%d routeAligned=%d\n",
+			"  %s peers=%d udpMiss=%d udpRecovered=%d routeAligned=%d udpFallbackActive=%d\n",
 			shortContentID(swarm.ContentID),
 			swarm.PeerCount,
 			swarmMiss,
 			swarmRecovered,
 			swarmAligned,
+			swarmFallbackActive,
 		)
 		if len(offenders) > 0 {
 			fmt.Printf("    topUdpMissPeers=%s\n", strings.Join(offenders, ","))
@@ -221,8 +229,9 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 		for _, peer := range peers {
 			advice := trackerPeerRouteAdvice(peer, udpProbeResults[peer.PeerID])
 			actual := peerTransferPaths[peer.PeerID]
+			fallbackState := trackerPeerFallbackState(peer, advice, actual, udpKeepaliveResults)
 			fmt.Printf(
-				"    %s addrs=%s observed=%s udp=%s observedUdp=%s route=%s actual=%s routeDrift=%s have=%s lastSeen=%s\n",
+				"    %s addrs=%s observed=%s udp=%s observedUdp=%s route=%s actual=%s routeDrift=%s udpFallback=%s have=%s lastSeen=%s\n",
 				peer.PeerID,
 				strings.Join(peer.Addrs, ","),
 				peer.ObservedAddr,
@@ -231,6 +240,7 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 				advice,
 				emptyDash(actual.LastPath),
 				trackerRouteDrift(advice, actual.LastPath),
+				fallbackState,
 				formatHaveRanges(peer.HaveRanges),
 				time.Unix(peer.LastSeenAt, 0).Format(time.RFC3339),
 			)
@@ -307,6 +317,26 @@ func summarizeTrackerRouteDrift(status tracker.StatusResponse) (int, int, int) {
 	return udpMiss, udpRecovered, aligned
 }
 
+func summarizeTrackerFallbackActive(status tracker.StatusResponse) int {
+	udpProbeResults := make(map[string]tracker.UDPProbeResultStatus, len(status.UDPProbeResults))
+	for _, item := range status.UDPProbeResults {
+		udpProbeResults[item.TargetPeerID] = item
+	}
+	peerTransferPaths := make(map[string]tracker.PeerTransferPathStatus, len(status.PeerTransferPaths))
+	for _, item := range status.PeerTransferPaths {
+		peerTransferPaths[item.TargetPeerID] = item
+	}
+	udpKeepaliveResults := make(map[string]tracker.UDPKeepaliveStatus, len(status.UDPKeepaliveResults))
+	for _, item := range status.UDPKeepaliveResults {
+		udpKeepaliveResults[item.TargetPeerID] = item
+	}
+	total := 0
+	for _, swarm := range status.Swarms {
+		total += summarizeSwarmFallbackActive(swarm, udpProbeResults, peerTransferPaths, udpKeepaliveResults)
+	}
+	return total
+}
+
 func summarizeSwarmRouteDrift(swarm tracker.SwarmStatus, udpProbeResults map[string]tracker.UDPProbeResultStatus, peerTransferPaths map[string]tracker.PeerTransferPathStatus) (int, int, int) {
 	udpMiss := 0
 	udpRecovered := 0
@@ -368,6 +398,65 @@ func summarizeSwarmOffenders(swarm tracker.SwarmStatus, udpProbeResults map[stri
 		result = append(result, fmt.Sprintf("%s(tcp=%d)", item.peerID, item.tcpCount))
 	}
 	return result
+}
+
+func summarizeSwarmFallbackActive(swarm tracker.SwarmStatus, udpProbeResults map[string]tracker.UDPProbeResultStatus, peerTransferPaths map[string]tracker.PeerTransferPathStatus, udpKeepaliveResults map[string]tracker.UDPKeepaliveStatus) int {
+	total := 0
+	for _, peer := range swarm.Peers {
+		advice := trackerPeerRouteAdvice(peer, udpProbeResults[peer.PeerID])
+		if trackerPeerFallbackState(peer, advice, peerTransferPaths[peer.PeerID], udpKeepaliveResults) == "active" {
+			total++
+		}
+	}
+	return total
+}
+
+func trackerPeerFallbackState(peer tracker.PeerRecord, advice string, actual tracker.PeerTransferPathStatus, udpKeepaliveResults map[string]tracker.UDPKeepaliveStatus) string {
+	if trackerRouteDrift(advice, actual.LastPath) != "udp_miss" {
+		return "-"
+	}
+	latestKeepalive := tracker.UDPKeepaliveStatus{}
+	for _, key := range trackerPeerKeepaliveKeys(peer) {
+		result, ok := udpKeepaliveResults[key]
+		if !ok {
+			continue
+		}
+		if maxInt64(result.LastSuccessAt, result.LastFailureAt) > maxInt64(latestKeepalive.LastSuccessAt, latestKeepalive.LastFailureAt) {
+			latestKeepalive = result
+		}
+	}
+	if latestKeepalive.TargetPeerID == "" {
+		return "pending"
+	}
+	if latestKeepalive.LastFailureAt > latestKeepalive.LastSuccessAt {
+		return "active"
+	}
+	return "cooling"
+}
+
+func trackerPeerKeepaliveKeys(peer tracker.PeerRecord) []string {
+	keys := make([]string, 0, len(peer.UDPAddrs)+1)
+	if strings.TrimSpace(peer.ObservedUDPAddr) != "" {
+		keys = append(keys, "udp://"+peer.ObservedUDPAddr)
+	}
+	for _, addr := range peer.UDPAddrs {
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			continue
+		}
+		key := "udp://" + addr
+		exists := false
+		for _, current := range keys {
+			if current == key {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			keys = append(keys, key)
+		}
+	}
+	return keys
 }
 
 func formatHaveRanges(ranges []core.HaveRange) string {

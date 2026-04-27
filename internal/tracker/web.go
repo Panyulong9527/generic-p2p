@@ -767,20 +767,26 @@ const webAppHTML = `<!doctype html>
       const peerTransferPathMap = Object.fromEntries(
         peerTransferPaths.map((item) => [item.targetPeerId || "", item])
       );
+      const udpKeepaliveResultMap = Object.fromEntries(
+        udpKeepaliveResults.map((item) => [item.targetPeerId || "", item])
+      );
       const routeDriftSummary = summarizeRouteDrift(swarms, udpProbeResultMap, peerTransferPathMap);
+      const fallbackSummary = summarizeFallbackActive(swarms, udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap);
       const swarmHTML = swarms.length
         ? swarms.map((swarm) =>
           (() => {
             const swarmRouteSummary = summarizeSingleSwarmRouteDrift(swarm, udpProbeResultMap, peerTransferPathMap);
             const offenders = summarizeSwarmOffenders(swarm, udpProbeResultMap, peerTransferPathMap);
+            const swarmFallbackActive = summarizeSingleSwarmFallbackActive(swarm, udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap);
             return (
           '<div class="swarm">' +
             '<strong>' + escapeHTML(shortContentId(swarm.contentId)) + '</strong><br>' +
             swarm.peerCount + ' peers' +
             '<br><span class="meta-inline">udp miss ' + swarmRouteSummary.udpMiss + ' / udp recovered ' + swarmRouteSummary.udpRecovered + ' / aligned ' + swarmRouteSummary.aligned + '</span>' +
+            '<br><span class="meta-inline">udp fallback active ' + swarmFallbackActive + '</span>' +
             formatSwarmOffenders(offenders) +
             '<div class="subsection">' +
-              renderSwarmPeers(swarm.peers || [], udpProbeResultMap, peerTransferPathMap) +
+              renderSwarmPeers(swarm.peers || [], udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap) +
             '</div>' +
           '</div>'
             );
@@ -856,6 +862,11 @@ const webAppHTML = `<!doctype html>
           '<div class="metric"><strong>' + routeDriftSummary.udpRecovered + '</strong><span>udp recovered</span></div>' +
           '<div class="metric"><strong>' + routeDriftSummary.aligned + '</strong><span>route aligned</span></div>' +
         '</div>' +
+        '<div class="metric-row">' +
+          '<div class="metric"><strong>' + fallbackSummary.active + '</strong><span>udp fallback active</span></div>' +
+          '<div class="metric"><strong>' + fallbackSummary.pending + '</strong><span>udp fallback pending</span></div>' +
+          '<div class="metric"><strong>' + fallbackSummary.cooling + '</strong><span>udp fallback cooling</span></div>' +
+        '</div>' +
         pendingHTML +
         udpResultHTML +
         udpKeepaliveHTML +
@@ -872,14 +883,15 @@ const webAppHTML = `<!doctype html>
       return peers.map((peer) => escapeHTML(peer.peerId || "peer")).join(", ");
     }
 
-    function renderSwarmPeers(peers, udpProbeResultMap, peerTransferPathMap) {
+    function renderSwarmPeers(peers, udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap) {
       if (!peers.length) return '<div class="empty">No peers</div>';
       return peers.map((peer) => {
         const result = udpProbeResultMap[peer.peerId || ""] || null;
         const transfer = peerTransferPathMap[peer.peerId || ""] || null;
         const route = peerRouteAdvice(peer, result);
+        const fallback = peerFallbackState(peer, route, transfer, udpKeepaliveResultMap);
         return '<div class="swarm">' +
-          '<strong>' + escapeHTML(peer.peerId || "peer") + '</strong> ' + formatProbeResultChip(result) + ' ' + formatRouteChip(route) + ' ' + formatRouteDriftChip(route, transfer) + '<br>' +
+          '<strong>' + escapeHTML(peer.peerId || "peer") + '</strong> ' + formatProbeResultChip(result) + ' ' + formatRouteChip(route) + ' ' + formatRouteDriftChip(route, transfer) + ' ' + formatFallbackChip(fallback) + '<br>' +
           'actual ' + formatActualPathChip(transfer) + pathTotalsSuffix(transfer) +
           'udp ' + escapeHTML((peer.udpAddrs || []).join(",") || "-") +
           '<br>observed ' + escapeHTML(peer.observedUdpAddr || "-") +
@@ -941,6 +953,13 @@ const webAppHTML = `<!doctype html>
         return '';
       }
       return '<span class="chip ' + drift.className + '">' + escapeHTML(drift.label) + '</span>';
+    }
+
+    function formatFallbackChip(state) {
+      if (!state || state.label === "none") {
+        return '';
+      }
+      return '<span class="chip ' + state.className + '">' + escapeHTML(state.label) + '</span>';
     }
 
     function formatActualPathChip(item) {
@@ -1057,6 +1076,78 @@ const webAppHTML = `<!doctype html>
         summary.aligned += 1;
       }
       return summary;
+    }
+
+    function summarizeFallbackActive(swarms, udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap) {
+      const summary = { active: 0, pending: 0, cooling: 0 };
+      for (const swarm of swarms || []) {
+        const current = summarizeSingleSwarmFallbackStates(swarm, udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap);
+        summary.active += current.active;
+        summary.pending += current.pending;
+        summary.cooling += current.cooling;
+      }
+      return summary;
+    }
+
+    function summarizeSingleSwarmFallbackActive(swarm, udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap) {
+      return summarizeSingleSwarmFallbackStates(swarm, udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap).active;
+    }
+
+    function summarizeSingleSwarmFallbackStates(swarm, udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap) {
+      const summary = { active: 0, pending: 0, cooling: 0 };
+      for (const peer of (swarm && swarm.peers) || []) {
+        const route = peerRouteAdvice(peer, udpProbeResultMap[peer.peerId || ""] || null);
+        const transfer = peerTransferPathMap[peer.peerId || ""] || null;
+        const state = peerFallbackState(peer, route, transfer, udpKeepaliveResultMap);
+        if (state.label === "udp fallback active") summary.active += 1;
+        if (state.label === "udp fallback pending") summary.pending += 1;
+        if (state.label === "udp fallback cooling") summary.cooling += 1;
+      }
+      return summary;
+    }
+
+    function peerFallbackState(peer, advice, transfer, udpKeepaliveResultMap) {
+      const drift = peerRouteDrift(advice, transfer);
+      if (!drift || drift.label !== "udp miss") {
+        return { label: "none", className: "" };
+      }
+      const latest = latestKeepaliveResult(peer, udpKeepaliveResultMap);
+      if (!latest) {
+        return { label: "udp fallback pending", className: "chip-timeout" };
+      }
+      const lastSuccess = Number(latest.lastSuccessAt || 0);
+      const lastFailure = Number(latest.lastFailureAt || 0);
+      if (lastFailure > lastSuccess) {
+        return { label: "udp fallback active", className: "chip-fail" };
+      }
+      return { label: "udp fallback cooling", className: "chip-info" };
+    }
+
+    function latestKeepaliveResult(peer, udpKeepaliveResultMap) {
+      let latest = null;
+      for (const key of peerKeepaliveKeys(peer)) {
+        const current = udpKeepaliveResultMap[key];
+        if (!current) continue;
+        const currentAt = Math.max(Number(current.lastSuccessAt || 0), Number(current.lastFailureAt || 0));
+        const latestAt = latest ? Math.max(Number(latest.lastSuccessAt || 0), Number(latest.lastFailureAt || 0)) : 0;
+        if (!latest || currentAt > latestAt) {
+          latest = current;
+        }
+      }
+      return latest;
+    }
+
+    function peerKeepaliveKeys(peer) {
+      const keys = [];
+      if (peer && peer.observedUdpAddr) {
+        keys.push("udp://" + peer.observedUdpAddr);
+      }
+      for (const addr of (peer && peer.udpAddrs) || []) {
+        if (!addr) continue;
+        const key = "udp://" + addr;
+        if (!keys.includes(key)) keys.push(key);
+      }
+      return keys;
     }
 
     function summarizeSwarmOffenders(swarm, udpProbeResultMap, peerTransferPathMap) {
