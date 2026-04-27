@@ -294,14 +294,21 @@ func (c *UDPClient) WithLocalAddr(localAddr string) *UDPClient {
 }
 
 func (c *UDPClient) Probe() error {
-	return c.probe("", "")
+	return c.probeBurst("", "", 1, 0)
 }
 
 func (c *UDPClient) ProbeForPeer(contentID string, peerID string) error {
-	return c.probe(contentID, peerID)
+	return c.probeBurst(contentID, peerID, 1, 0)
 }
 
-func (c *UDPClient) probe(contentID string, peerID string) error {
+func (c *UDPClient) ProbeBurstForPeer(contentID string, peerID string, attempts int, gap time.Duration) error {
+	return c.probeBurst(contentID, peerID, attempts, gap)
+}
+
+func (c *UDPClient) probeBurst(contentID string, peerID string, attempts int, gap time.Duration) error {
+	if attempts <= 0 {
+		attempts = 1
+	}
 	requestID, err := newUDPRequestID()
 	if err != nil {
 		return err
@@ -311,15 +318,11 @@ func (c *UDPClient) probe(contentID string, peerID string) error {
 		return err
 	}
 	if conn == nil {
-		return c.probeWithSharedSocket(remote, requestID, contentID, peerID)
+		return c.probeWithSharedSocket(remote, requestID, contentID, peerID, attempts, gap)
 	}
 	defer conn.Close()
 
-	if err := writeUDPMessage(conn, remote, UDPMessageTypePing, UDPPing{
-		RequestID: requestID,
-		PeerID:    peerID,
-		ContentID: contentID,
-	}); err != nil {
+	if err := sendUDPPingBurst(conn, remote, requestID, contentID, peerID, attempts, gap); err != nil {
 		return err
 	}
 
@@ -360,18 +363,14 @@ func (c *UDPClient) probe(contentID string, peerID string) error {
 	}
 }
 
-func (c *UDPClient) probeWithSharedSocket(remote *net.UDPAddr, requestID string, contentID string, peerID string) error {
+func (c *UDPClient) probeWithSharedSocket(remote *net.UDPAddr, requestID string, contentID string, peerID string, attempts int, gap time.Duration) error {
 	socket, ok := lookupUDPSharedSocket(c.LocalAddr)
 	if !ok {
 		return fmt.Errorf("shared udp socket unavailable for %s", c.LocalAddr)
 	}
 	msgCh, release := socket.register(requestID)
 	defer release()
-	if err := writeUDPMessage(socket.conn, remote, UDPMessageTypePing, UDPPing{
-		RequestID: requestID,
-		PeerID:    peerID,
-		ContentID: contentID,
-	}); err != nil {
+	if err := sendUDPPingBurst(socket.conn, remote, requestID, contentID, peerID, attempts, gap); err != nil {
 		return err
 	}
 	deadline := time.NewTimer(c.Timeout)
@@ -400,6 +399,22 @@ func (c *UDPClient) probeWithSharedSocket(remote *net.UDPAddr, requestID string,
 			}
 		}
 	}
+}
+
+func sendUDPPingBurst(conn *net.UDPConn, remote *net.UDPAddr, requestID string, contentID string, peerID string, attempts int, gap time.Duration) error {
+	for i := 0; i < attempts; i++ {
+		if i > 0 && gap > 0 {
+			time.Sleep(gap)
+		}
+		if err := writeUDPMessage(conn, remote, UDPMessageTypePing, UDPPing{
+			RequestID: requestID,
+			PeerID:    peerID,
+			ContentID: contentID,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func RememberObservedUDPPeer(contentID string, peerID string, addr string, now time.Time) {

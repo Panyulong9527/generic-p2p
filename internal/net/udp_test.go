@@ -124,6 +124,41 @@ func TestUDPClientCanReuseServerListenSocket(t *testing.T) {
 	}
 }
 
+func TestUDPClientProbeBurstForPeer(t *testing.T) {
+	addr := freeUDPAddr(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server := NewUDPServer(addr, StaticContentSource{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Listen(ctx)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if err := NewUDPClient(addr, 50*time.Millisecond).ProbeBurstForPeer("content-burst", "peer-burst", 3, 10*time.Millisecond); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	observedAddr, ok := ObservedUDPPeerAddr("content-burst", "peer-burst", time.Second, time.Now())
+	if !ok || observedAddr == "" {
+		t.Fatal("expected burst probe to store observed udp peer address")
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("udp server did not stop")
+	}
+}
+
 func TestShouldKeepAliveObservedUDPPeerThrottlesRequests(t *testing.T) {
 	addr := freeUDPAddr(t)
 	ctx, cancel := context.WithCancel(context.Background())
