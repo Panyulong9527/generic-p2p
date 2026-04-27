@@ -277,6 +277,11 @@ type UDPClient struct {
 	Timeout   time.Duration
 }
 
+type UDPBurstPhase struct {
+	Attempts int
+	Gap      time.Duration
+}
+
 func NewUDPClient(addr string, timeout time.Duration) *UDPClient {
 	return &UDPClient{
 		Addr:    addr,
@@ -305,10 +310,16 @@ func (c *UDPClient) ProbeBurstForPeer(contentID string, peerID string, attempts 
 	return c.probeBurst(contentID, peerID, attempts, gap)
 }
 
+func (c *UDPClient) ProbeMultiBurstForPeer(contentID string, peerID string, phases []UDPBurstPhase) error {
+	return c.probeMultiBurst(contentID, peerID, phases)
+}
+
 func (c *UDPClient) probeBurst(contentID string, peerID string, attempts int, gap time.Duration) error {
-	if attempts <= 0 {
-		attempts = 1
-	}
+	return c.probeMultiBurst(contentID, peerID, []UDPBurstPhase{{Attempts: attempts, Gap: gap}})
+}
+
+func (c *UDPClient) probeMultiBurst(contentID string, peerID string, phases []UDPBurstPhase) error {
+	phases = normalizeUDPBurstPhases(phases)
 	requestID, err := newUDPRequestID()
 	if err != nil {
 		return err
@@ -318,11 +329,11 @@ func (c *UDPClient) probeBurst(contentID string, peerID string, attempts int, ga
 		return err
 	}
 	if conn == nil {
-		return c.probeWithSharedSocket(remote, requestID, contentID, peerID, attempts, gap)
+		return c.probeWithSharedSocket(remote, requestID, contentID, peerID, phases)
 	}
 	defer conn.Close()
 
-	if err := sendUDPPingBurst(conn, remote, requestID, contentID, peerID, attempts, gap); err != nil {
+	if err := sendUDPPingPhases(conn, remote, requestID, contentID, peerID, phases); err != nil {
 		return err
 	}
 
@@ -363,14 +374,14 @@ func (c *UDPClient) probeBurst(contentID string, peerID string, attempts int, ga
 	}
 }
 
-func (c *UDPClient) probeWithSharedSocket(remote *net.UDPAddr, requestID string, contentID string, peerID string, attempts int, gap time.Duration) error {
+func (c *UDPClient) probeWithSharedSocket(remote *net.UDPAddr, requestID string, contentID string, peerID string, phases []UDPBurstPhase) error {
 	socket, ok := lookupUDPSharedSocket(c.LocalAddr)
 	if !ok {
 		return fmt.Errorf("shared udp socket unavailable for %s", c.LocalAddr)
 	}
 	msgCh, release := socket.register(requestID)
 	defer release()
-	if err := sendUDPPingBurst(socket.conn, remote, requestID, contentID, peerID, attempts, gap); err != nil {
+	if err := sendUDPPingPhases(socket.conn, remote, requestID, contentID, peerID, phases); err != nil {
 		return err
 	}
 	deadline := time.NewTimer(c.Timeout)
@@ -401,6 +412,18 @@ func (c *UDPClient) probeWithSharedSocket(remote *net.UDPAddr, requestID string,
 	}
 }
 
+func sendUDPPingPhases(conn *net.UDPConn, remote *net.UDPAddr, requestID string, contentID string, peerID string, phases []UDPBurstPhase) error {
+	for phaseIndex, phase := range normalizeUDPBurstPhases(phases) {
+		if phaseIndex > 0 && phase.Gap > 0 {
+			time.Sleep(phase.Gap)
+		}
+		if err := sendUDPPingBurst(conn, remote, requestID, contentID, peerID, phase.Attempts, phase.Gap); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func sendUDPPingBurst(conn *net.UDPConn, remote *net.UDPAddr, requestID string, contentID string, peerID string, attempts int, gap time.Duration) error {
 	for i := 0; i < attempts; i++ {
 		if i > 0 && gap > 0 {
@@ -415,6 +438,23 @@ func sendUDPPingBurst(conn *net.UDPConn, remote *net.UDPAddr, requestID string, 
 		}
 	}
 	return nil
+}
+
+func normalizeUDPBurstPhases(phases []UDPBurstPhase) []UDPBurstPhase {
+	if len(phases) == 0 {
+		return []UDPBurstPhase{{Attempts: 1}}
+	}
+	normalized := make([]UDPBurstPhase, 0, len(phases))
+	for _, phase := range phases {
+		if phase.Attempts <= 0 {
+			phase.Attempts = 1
+		}
+		if phase.Gap < 0 {
+			phase.Gap = 0
+		}
+		normalized = append(normalized, phase)
+	}
+	return normalized
 }
 
 func RememberObservedUDPPeer(contentID string, peerID string, addr string, now time.Time) {

@@ -133,7 +133,10 @@ func maybeRequesterSideBurstPunch(logger *logging.Logger, contentID string, peer
 		for _, target := range targets {
 			if err := p2pnet.NewUDPClient(target, 1500*time.Millisecond).
 				WithLocalAddr(selfUDPListenAddr).
-				ProbeBurstForPeer(contentID, peer.PeerID, 3, 80*time.Millisecond); err != nil {
+				ProbeMultiBurstForPeer(contentID, peer.PeerID, []p2pnet.UDPBurstPhase{
+					{Attempts: 3, Gap: 80 * time.Millisecond},
+					{Attempts: 2, Gap: 250 * time.Millisecond},
+				}); err != nil {
 				logger.Info("tracker_udp_requester_burst_probe_failed",
 					"contentId", contentID,
 					"peerId", peer.PeerID,

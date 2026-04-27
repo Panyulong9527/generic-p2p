@@ -159,6 +159,65 @@ func TestUDPClientProbeBurstForPeer(t *testing.T) {
 	}
 }
 
+func TestNormalizeUDPBurstPhasesDefaultsAndSanitizes(t *testing.T) {
+	got := normalizeUDPBurstPhases([]UDPBurstPhase{
+		{Attempts: 0, Gap: -time.Second},
+		{Attempts: 2, Gap: 250 * time.Millisecond},
+	})
+	if len(got) != 2 {
+		t.Fatalf("expected 2 normalized phases, got %d", len(got))
+	}
+	if got[0].Attempts != 1 || got[0].Gap != 0 {
+		t.Fatalf("expected first phase sanitized to attempts=1 gap=0, got %+v", got[0])
+	}
+	if got[1].Attempts != 2 || got[1].Gap != 250*time.Millisecond {
+		t.Fatalf("expected second phase unchanged, got %+v", got[1])
+	}
+
+	defaulted := normalizeUDPBurstPhases(nil)
+	if len(defaulted) != 1 || defaulted[0].Attempts != 1 || defaulted[0].Gap != 0 {
+		t.Fatalf("expected default single phase, got %+v", defaulted)
+	}
+}
+
+func TestUDPClientProbeMultiBurstForPeer(t *testing.T) {
+	addr := freeUDPAddr(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server := NewUDPServer(addr, StaticContentSource{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Listen(ctx)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if err := NewUDPClient(addr, 100*time.Millisecond).ProbeMultiBurstForPeer("content-multi-burst", "peer-multi-burst", []UDPBurstPhase{
+			{Attempts: 2, Gap: 5 * time.Millisecond},
+			{Attempts: 1, Gap: 15 * time.Millisecond},
+		}); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	observedAddr, ok := ObservedUDPPeerAddr("content-multi-burst", "peer-multi-burst", time.Second, time.Now())
+	if !ok || observedAddr == "" {
+		t.Fatal("expected multi-burst probe to store observed udp peer address")
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("udp server did not stop")
+	}
+}
+
 func TestShouldKeepAliveObservedUDPPeerThrottlesRequests(t *testing.T) {
 	addr := freeUDPAddr(t)
 	ctx, cancel := context.WithCancel(context.Background())
