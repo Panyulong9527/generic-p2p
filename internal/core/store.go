@@ -18,21 +18,22 @@ type PieceStore struct {
 }
 
 type StoreStatus struct {
-	ContentID       string               `json:"contentId"`
-	State           string               `json:"state"`
-	ProgressValue   float64              `json:"progress"`
-	CompletedPieces int                  `json:"completedPieces"`
-	TotalPieces     int                  `json:"totalPieces"`
-	CompletedRanges []HaveRange          `json:"completedRanges"`
-	DownloadBytes   int64                `json:"downloadBytes"`
-	UploadBytes     int64                `json:"uploadBytes"`
-	DownloadRate    int64                `json:"downloadRate"`
-	UploadRate      int64                `json:"uploadRate"`
-	Peers           int                  `json:"peers"`
-	PathStats       PathStats            `json:"pathStats"`
-	PeerStats       map[string]PeerStats `json:"peerStats,omitempty"`
-	ActiveDownloads []ActiveDownload     `json:"activeDownloads,omitempty"`
-	RecentDecisions []SelectionDecision  `json:"recentDecisions,omitempty"`
+	ContentID        string                  `json:"contentId"`
+	State            string                  `json:"state"`
+	ProgressValue    float64                 `json:"progress"`
+	CompletedPieces  int                     `json:"completedPieces"`
+	TotalPieces      int                     `json:"totalPieces"`
+	CompletedRanges  []HaveRange             `json:"completedRanges"`
+	DownloadBytes    int64                   `json:"downloadBytes"`
+	UploadBytes      int64                   `json:"uploadBytes"`
+	DownloadRate     int64                   `json:"downloadRate"`
+	UploadRate       int64                   `json:"uploadRate"`
+	Peers            int                     `json:"peers"`
+	PathStats        PathStats               `json:"pathStats"`
+	PeerStats        map[string]PeerStats    `json:"peerStats,omitempty"`
+	ActiveDownloads  []ActiveDownload        `json:"activeDownloads,omitempty"`
+	RecentDecisions  []SelectionDecision     `json:"recentDecisions,omitempty"`
+	UDPBurstProfiles []UDPBurstProfileStatus `json:"udpBurstProfiles,omitempty"`
 }
 
 func (s StoreStatus) Progress() float64 {
@@ -148,21 +149,22 @@ func (s *PieceStore) Status() StoreStatus {
 	}
 
 	return StoreStatus{
-		ContentID:       s.manifest.ContentID,
-		State:           state,
-		ProgressValue:   progress(len(completedIndexes), len(s.manifest.Pieces)),
-		CompletedPieces: len(completedIndexes),
-		TotalPieces:     len(s.manifest.Pieces),
-		CompletedRanges: CompressPieceIndexes(completedIndexes),
-		DownloadBytes:   downloadBytes,
-		UploadBytes:     runtimeSnapshot(s.runtime).UploadBytes,
-		DownloadRate:    runtimeSnapshot(s.runtime).DownloadRate,
-		UploadRate:      runtimeSnapshot(s.runtime).UploadRate,
-		Peers:           runtimeSnapshot(s.runtime).Peers,
-		PathStats:       mergePathStats(runtimeSnapshot(s.runtime).PathStats, downloadBytes),
-		PeerStats:       runtimeSnapshot(s.runtime).PeerStats,
-		ActiveDownloads: runtimeSnapshot(s.runtime).ActiveDownloads,
-		RecentDecisions: runtimeSnapshot(s.runtime).RecentDecisions,
+		ContentID:        s.manifest.ContentID,
+		State:            state,
+		ProgressValue:    progress(len(completedIndexes), len(s.manifest.Pieces)),
+		CompletedPieces:  len(completedIndexes),
+		TotalPieces:      len(s.manifest.Pieces),
+		CompletedRanges:  CompressPieceIndexes(completedIndexes),
+		DownloadBytes:    downloadBytes,
+		UploadBytes:      runtimeSnapshot(s.runtime).UploadBytes,
+		DownloadRate:     runtimeSnapshot(s.runtime).DownloadRate,
+		UploadRate:       runtimeSnapshot(s.runtime).UploadRate,
+		Peers:            runtimeSnapshot(s.runtime).Peers,
+		PathStats:        mergePathStats(runtimeSnapshot(s.runtime).PathStats, downloadBytes),
+		PeerStats:        runtimeSnapshot(s.runtime).PeerStats,
+		ActiveDownloads:  runtimeSnapshot(s.runtime).ActiveDownloads,
+		RecentDecisions:  runtimeSnapshot(s.runtime).RecentDecisions,
+		UDPBurstProfiles: runtimeSnapshot(s.runtime).UDPBurstProfiles,
 	}
 }
 

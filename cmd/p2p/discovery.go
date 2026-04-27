@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"generic-p2p/internal/core"
 	"generic-p2p/internal/logging"
 	p2pnet "generic-p2p/internal/net"
 	"generic-p2p/internal/scheduler"
@@ -387,6 +389,46 @@ func udpBurstStats(contentID string, peerID string, now time.Time) (udpBurstProf
 		return udpBurstProfileStats{}, false
 	}
 	return stats, true
+}
+
+func currentUDPBurstProfiles(contentID string, now time.Time) []core.UDPBurstProfileStatus {
+	if strings.TrimSpace(contentID) == "" {
+		return nil
+	}
+	prefix := contentID + "|"
+	udpBurstLearningState.mu.Lock()
+	defer udpBurstLearningState.mu.Unlock()
+
+	profiles := make([]core.UDPBurstProfileStatus, 0)
+	for key, stats := range udpBurstLearningState.entries {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if now.Sub(maxTime(stats.LastSuccessAt, stats.LastFailureAt)) > time.Minute {
+			delete(udpBurstLearningState.entries, key)
+			continue
+		}
+		peerID := strings.TrimPrefix(key, prefix)
+		item := core.UDPBurstProfileStatus{
+			PeerID:       peerID,
+			Profile:      stats.LastProfile,
+			FailureCount: stats.FailureCount,
+		}
+		if !stats.LastSuccessAt.IsZero() {
+			item.LastSuccessAt = stats.LastSuccessAt.Format(time.RFC3339)
+		}
+		if !stats.LastFailureAt.IsZero() {
+			item.LastFailureAt = stats.LastFailureAt.Format(time.RFC3339)
+		}
+		profiles = append(profiles, item)
+	}
+	sort.Slice(profiles, func(i, j int) bool {
+		if profiles[i].Profile != profiles[j].Profile {
+			return profiles[i].Profile < profiles[j].Profile
+		}
+		return profiles[i].PeerID < profiles[j].PeerID
+	})
+	return profiles
 }
 
 func phasesForBurstProfile(profile string) []p2pnet.UDPBurstPhase {

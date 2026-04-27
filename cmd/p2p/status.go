@@ -142,6 +142,29 @@ func printPrettyStatus(status core.StoreStatus) {
 			)
 		}
 	}
+	if len(status.UDPBurstProfiles) > 0 {
+		fmt.Println("udpBurstProfiles")
+		for _, profile := range status.UDPBurstProfiles {
+			last := profile.LastSuccessAt
+			result := "success"
+			if profile.LastFailureAt != "" && (last == "" || profile.LastFailureAt > last) {
+				last = profile.LastFailureAt
+				result = "failure"
+			}
+			if last == "" {
+				last = "-"
+				result = "unknown"
+			}
+			fmt.Printf(
+				"  %s profile=%s last=%s at=%s failures=%d\n",
+				profile.PeerID,
+				profile.Profile,
+				result,
+				last,
+				profile.FailureCount,
+			)
+		}
+	}
 
 	if len(status.PeerStats) == 0 {
 		fmt.Println("peerStats none")

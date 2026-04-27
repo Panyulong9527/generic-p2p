@@ -60,6 +60,7 @@ func downloadPieces(logger *logging.Logger, manifest *core.ContentManifest, stor
 				}
 				if runtime := store.RuntimeStats(); runtime != nil {
 					_ = runtime.SetPeers(len(peerCandidates))
+					syncRuntimeUDPBurstProfiles(store, manifest.ContentID)
 				}
 
 				pieceIndex, ok := reserveNextPiece(manifest, store, state, peerCandidates)
@@ -118,6 +119,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 		}
 		if runtime := store.RuntimeStats(); runtime != nil {
 			_ = runtime.SetPeers(len(peerCandidates))
+			syncRuntimeUDPBurstProfiles(store, manifest.ContentID)
 		}
 
 		selected, ok := chooser.ChoosePeer(pieceIndex, peerCandidates)
@@ -274,6 +276,14 @@ func recordSelectionDecision(store *core.PieceStore, pieceIndex int, selected sc
 		decision.TopUDPScore = topUDP.Score
 	}
 	_ = runtime.RecordSelectionDecision(decision)
+}
+
+func syncRuntimeUDPBurstProfiles(store *core.PieceStore, contentID string) {
+	runtime := store.RuntimeStats()
+	if runtime == nil {
+		return
+	}
+	_ = runtime.SetUDPBurstProfiles(currentUDPBurstProfiles(contentID, time.Now()))
 }
 
 func selectionReason(pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) string {

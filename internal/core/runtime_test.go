@@ -132,6 +132,43 @@ func TestRuntimeStatsPersistsRecentSelectionDecisions(t *testing.T) {
 	}
 }
 
+func TestRuntimeStatsPersistsUDPBurstProfiles(t *testing.T) {
+	dir := t.TempDir()
+
+	stats, err := OpenRuntimeStats(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles := []UDPBurstProfileStatus{
+		{
+			PeerID:        "peer-a",
+			Profile:       "warm",
+			LastSuccessAt: time.Unix(1700000300, 0).Format(time.RFC3339),
+		},
+		{
+			PeerID:        "peer-b",
+			Profile:       "aggressive",
+			LastFailureAt: time.Unix(1700000310, 0).Format(time.RFC3339),
+			FailureCount:  2,
+		},
+	}
+	if err := stats.SetUDPBurstProfiles(profiles); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := OpenRuntimeStats(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := reopened.Snapshot()
+	if len(snapshot.UDPBurstProfiles) != 2 {
+		t.Fatalf("expected two udp burst profiles, got %+v", snapshot.UDPBurstProfiles)
+	}
+	if snapshot.UDPBurstProfiles[0].PeerID != "peer-a" || snapshot.UDPBurstProfiles[1].FailureCount != 2 {
+		t.Fatalf("unexpected udp burst profiles: %+v", snapshot.UDPBurstProfiles)
+	}
+}
+
 func TestRuntimeStatsRateFallsToZeroAfterWindow(t *testing.T) {
 	dir := t.TempDir()
 

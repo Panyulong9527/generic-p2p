@@ -431,3 +431,28 @@ func TestLearnedUDPBurstPhasesEscalatesAfterRepeatedRecentFailures(t *testing.T)
 		t.Fatalf("expected escalated aggressive burst phases %v, got %v", want, got)
 	}
 }
+
+func TestCurrentUDPBurstProfilesReturnsPerPeerSnapshot(t *testing.T) {
+	now := time.Unix(1500, 0)
+	recordUDPBurstOutcome("sha256-demo", "peer-h", "warm", true, now.Add(-6*time.Second))
+	recordUDPBurstOutcome("sha256-demo", "peer-i", "default", false, now.Add(-4*time.Second))
+
+	got := currentUDPBurstProfiles("sha256-demo", now)
+	if len(got) < 2 {
+		t.Fatalf("expected at least two udp burst profiles, got %+v", got)
+	}
+
+	foundWarm := false
+	foundDefault := false
+	for _, profile := range got {
+		switch profile.PeerID {
+		case "peer-h":
+			foundWarm = profile.Profile == "warm" && profile.LastSuccessAt != ""
+		case "peer-i":
+			foundDefault = profile.Profile == "default" && profile.LastFailureAt != "" && profile.FailureCount >= 1
+		}
+	}
+	if !foundWarm || !foundDefault {
+		t.Fatalf("expected peer-h warm and peer-i default profiles in snapshot, got %+v", got)
+	}
+}

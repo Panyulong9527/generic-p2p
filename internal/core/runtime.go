@@ -17,17 +17,18 @@ type RuntimeStats struct {
 }
 
 type RuntimeData struct {
-	DownloadBytes   int64                `json:"downloadBytes"`
-	UploadBytes     int64                `json:"uploadBytes"`
-	DownloadRate    int64                `json:"downloadRate"`
-	UploadRate      int64                `json:"uploadRate"`
-	Peers           int                  `json:"peers"`
-	PathStats       PathStats            `json:"pathStats"`
-	PeerStats       map[string]PeerStats `json:"peerStats,omitempty"`
-	ActiveDownloads []ActiveDownload     `json:"activeDownloads,omitempty"`
-	RecentDecisions []SelectionDecision  `json:"recentDecisions,omitempty"`
-	DownloadSamples []transferSample     `json:"downloadSamples,omitempty"`
-	UploadSamples   []transferSample     `json:"uploadSamples,omitempty"`
+	DownloadBytes    int64                   `json:"downloadBytes"`
+	UploadBytes      int64                   `json:"uploadBytes"`
+	DownloadRate     int64                   `json:"downloadRate"`
+	UploadRate       int64                   `json:"uploadRate"`
+	Peers            int                     `json:"peers"`
+	PathStats        PathStats               `json:"pathStats"`
+	PeerStats        map[string]PeerStats    `json:"peerStats,omitempty"`
+	ActiveDownloads  []ActiveDownload        `json:"activeDownloads,omitempty"`
+	RecentDecisions  []SelectionDecision     `json:"recentDecisions,omitempty"`
+	UDPBurstProfiles []UDPBurstProfileStatus `json:"udpBurstProfiles,omitempty"`
+	DownloadSamples  []transferSample        `json:"downloadSamples,omitempty"`
+	UploadSamples    []transferSample        `json:"uploadSamples,omitempty"`
 }
 
 type PeerStats struct {
@@ -53,6 +54,14 @@ type SelectionDecision struct {
 	TopUDPScore       float64 `json:"topUdpScore,omitempty"`
 	Reason            string  `json:"reason"`
 	RecordedAt        string  `json:"recordedAt"`
+}
+
+type UDPBurstProfileStatus struct {
+	PeerID        string `json:"peerId"`
+	Profile       string `json:"profile"`
+	LastSuccessAt string `json:"lastSuccessAt,omitempty"`
+	LastFailureAt string `json:"lastFailureAt,omitempty"`
+	FailureCount  int    `json:"failureCount"`
 }
 
 type transferSample struct {
@@ -146,6 +155,18 @@ func (r *RuntimeStats) RecordSelectionDecision(decision SelectionDecision) error
 	if len(r.data.RecentDecisions) > 20 {
 		r.data.RecentDecisions = append([]SelectionDecision(nil), r.data.RecentDecisions[len(r.data.RecentDecisions)-20:]...)
 	}
+	return r.saveLocked()
+}
+
+func (r *RuntimeStats) SetUDPBurstProfiles(profiles []UDPBurstProfileStatus) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if len(profiles) == 0 {
+		r.data.UDPBurstProfiles = nil
+		return r.saveLocked()
+	}
+	r.data.UDPBurstProfiles = append([]UDPBurstProfileStatus(nil), profiles...)
 	return r.saveLocked()
 }
 
@@ -255,6 +276,9 @@ func cloneRuntimeData(input RuntimeData) RuntimeData {
 	}
 	if len(input.RecentDecisions) > 0 {
 		output.RecentDecisions = append([]SelectionDecision(nil), input.RecentDecisions...)
+	}
+	if len(input.UDPBurstProfiles) > 0 {
+		output.UDPBurstProfiles = append([]UDPBurstProfileStatus(nil), input.UDPBurstProfiles...)
 	}
 	if len(input.DownloadSamples) > 0 {
 		output.DownloadSamples = append([]transferSample(nil), input.DownloadSamples...)
