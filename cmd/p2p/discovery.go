@@ -58,7 +58,9 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 		return nil, nil, fmt.Errorf("discover tracker udp peers: %w", err)
 	}
 
-	probeBiases := trackerUDPProbeBiases(client, trackerURL, contentID, trackerStatus)
+	now := time.Now()
+	status, _ := loadTrackerStatus(client, trackerURL, trackerStatus, now)
+	probeBiases := buildTrackerUDPPeerBiases(status, contentID, now)
 	addrs := make([]string, 0, len(peers))
 	preferences := make(map[string]udpPeerPreference)
 	for _, peer := range peers {
@@ -72,7 +74,7 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 					"error", err.Error(),
 				)
 			} else {
-				maybeRequesterSideBurstPunch(logger, contentID, peer, selfUDPListenAddr)
+				maybeRequesterSideBurstPunch(logger, contentID, peer, selfUDPListenAddr, adaptiveRequesterBurstPhases(peer, contentID, status, now))
 			}
 		}
 		if observedAddr, seenAt, ok := p2pnet.ObservedUDPPeer(contentID, peer.PeerID, 30*time.Second, now); ok && observedAddr != selfUDPListenAddr {
@@ -121,7 +123,7 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 	return addrs, preferences, nil
 }
 
-func maybeRequesterSideBurstPunch(logger *logging.Logger, contentID string, peer tracker.PeerRecord, selfUDPListenAddr string) {
+func maybeRequesterSideBurstPunch(logger *logging.Logger, contentID string, peer tracker.PeerRecord, selfUDPListenAddr string, phases []p2pnet.UDPBurstPhase) {
 	if strings.TrimSpace(selfUDPListenAddr) == "" || strings.TrimSpace(peer.PeerID) == "" {
 		return
 	}
@@ -133,10 +135,7 @@ func maybeRequesterSideBurstPunch(logger *logging.Logger, contentID string, peer
 		for _, target := range targets {
 			if err := p2pnet.NewUDPClient(target, 1500*time.Millisecond).
 				WithLocalAddr(selfUDPListenAddr).
-				ProbeMultiBurstForPeer(contentID, peer.PeerID, []p2pnet.UDPBurstPhase{
-					{Attempts: 3, Gap: 80 * time.Millisecond},
-					{Attempts: 2, Gap: 250 * time.Millisecond},
-				}); err != nil {
+				ProbeMultiBurstForPeer(contentID, peer.PeerID, phases); err != nil {
 				logger.Info("tracker_udp_requester_burst_probe_failed",
 					"contentId", contentID,
 					"peerId", peer.PeerID,
@@ -174,6 +173,127 @@ func requesterSideBurstPunchTargets(peer tracker.PeerRecord, selfUDPListenAddr s
 		appendTarget(addr)
 	}
 	return targets
+}
+
+func loadTrackerStatus(client *tracker.Client, trackerURL string, statusCache *trackerStatusCache, now time.Time) (tracker.StatusResponse, bool) {
+	if statusCache != nil {
+		if cached, ok := statusCache.Load(trackerURL, now); ok {
+			return cached, true
+		}
+	}
+	status, err := client.GetStatus(context.Background())
+	if err != nil {
+		return tracker.StatusResponse{}, false
+	}
+	if statusCache != nil {
+		statusCache.Store(trackerURL, status, now)
+	}
+	return status, true
+}
+
+func defaultUDPBurstPhases() []p2pnet.UDPBurstPhase {
+	return []p2pnet.UDPBurstPhase{
+		{Attempts: 3, Gap: 80 * time.Millisecond},
+		{Attempts: 2, Gap: 250 * time.Millisecond},
+	}
+}
+
+func warmUDPBurstPhases() []p2pnet.UDPBurstPhase {
+	return []p2pnet.UDPBurstPhase{
+		{Attempts: 2, Gap: 70 * time.Millisecond},
+		{Attempts: 1, Gap: 180 * time.Millisecond},
+	}
+}
+
+func aggressiveUDPBurstPhases() []p2pnet.UDPBurstPhase {
+	return []p2pnet.UDPBurstPhase{
+		{Attempts: 4, Gap: 60 * time.Millisecond},
+		{Attempts: 3, Gap: 180 * time.Millisecond},
+		{Attempts: 2, Gap: 320 * time.Millisecond},
+	}
+}
+
+func adaptiveRequesterBurstPhases(peer tracker.PeerRecord, contentID string, status tracker.StatusResponse, now time.Time) []p2pnet.UDPBurstPhase {
+	probeResult, transferPath, keepaliveResult := trackerPeerUDPState(status, contentID, peer)
+	if trackerPeerNeedsAggressiveBurst(peer, probeResult, transferPath, keepaliveResult, now) {
+		return aggressiveUDPBurstPhases()
+	}
+	if requesterHasWarmUDPPath(peer.PeerID, contentID, probeResult, transferPath, keepaliveResult, now) {
+		return warmUDPBurstPhases()
+	}
+	return defaultUDPBurstPhases()
+}
+
+func adaptiveResponderBurstPhases(request tracker.UDPProbeTask, now time.Time) []p2pnet.UDPBurstPhase {
+	if requesterAddr, _, ok := p2pnet.ObservedUDPPeer(request.ContentID, request.RequesterPeerID, 12*time.Second, now); ok && strings.TrimSpace(requesterAddr) != "" {
+		return warmUDPBurstPhases()
+	}
+	if strings.TrimSpace(request.ObservedUDPAddr) == "" {
+		return aggressiveUDPBurstPhases()
+	}
+	return defaultUDPBurstPhases()
+}
+
+func requesterHasWarmUDPPath(peerID string, contentID string, probeResult tracker.UDPProbeResultStatus, transferPath tracker.PeerTransferPathStatus, keepaliveResult tracker.UDPKeepaliveStatus, now time.Time) bool {
+	if peerID != "" {
+		if _, _, ok := p2pnet.ObservedUDPPeer(contentID, peerID, 12*time.Second, now); ok {
+			return true
+		}
+	}
+	if probeResult.LastSuccessAt > probeResult.LastFailureAt && probeResult.LastSuccessAt > 0 && now.Sub(time.Unix(probeResult.LastSuccessAt, 0)) <= 12*time.Second {
+		return true
+	}
+	if keepaliveResult.LastSuccessAt > keepaliveResult.LastFailureAt && keepaliveResult.LastSuccessAt > 0 && now.Sub(time.Unix(keepaliveResult.LastSuccessAt, 0)) <= 12*time.Second {
+		return true
+	}
+	if strings.TrimSpace(strings.ToLower(transferPath.LastPath)) == "udp" && transferPath.LastAt > 0 && now.Sub(time.Unix(transferPath.LastAt, 0)) <= 12*time.Second {
+		return true
+	}
+	return false
+}
+
+func trackerPeerNeedsAggressiveBurst(peer tracker.PeerRecord, probeResult tracker.UDPProbeResultStatus, transferPath tracker.PeerTransferPathStatus, keepaliveResult tracker.UDPKeepaliveStatus, now time.Time) bool {
+	if probeResult.LastFailureAt > probeResult.LastSuccessAt && probeResult.LastFailureAt > 0 && now.Sub(time.Unix(probeResult.LastFailureAt, 0)) <= 20*time.Second {
+		return true
+	}
+	if keepaliveResult.LastFailureAt > keepaliveResult.LastSuccessAt && keepaliveResult.LastFailureAt > 0 && now.Sub(time.Unix(keepaliveResult.LastFailureAt, 0)) <= 20*time.Second {
+		return true
+	}
+	if trackerUDPFallbackBias(transferPath, keepaliveResult, now) < 0 {
+		return true
+	}
+	if strings.TrimSpace(strings.ToLower(transferPath.LastPath)) == "tcp" && transferPath.LastAt > 0 {
+		probeAdvice := discoveryTrackerPeerRouteAdvice(peer, probeResult)
+		if discoveryTrackerRouteDrift(probeAdvice, transferPath.LastPath) == "udp_miss" && now.Sub(time.Unix(transferPath.LastAt, 0)) <= 20*time.Second {
+			return true
+		}
+	}
+	return false
+}
+
+func trackerPeerUDPState(status tracker.StatusResponse, contentID string, peer tracker.PeerRecord) (tracker.UDPProbeResultStatus, tracker.PeerTransferPathStatus, tracker.UDPKeepaliveStatus) {
+	var probeResult tracker.UDPProbeResultStatus
+	for _, item := range status.UDPProbeResults {
+		if item.TargetPeerID == peer.PeerID {
+			probeResult = item
+			break
+		}
+	}
+	var transferPath tracker.PeerTransferPathStatus
+	for _, item := range status.PeerTransferPaths {
+		if item.TargetPeerID == peer.PeerID && (strings.TrimSpace(item.ContentID) == "" || item.ContentID == contentID) {
+			transferPath = item
+			break
+		}
+	}
+	keepaliveResults := make(map[string]tracker.UDPKeepaliveStatus, len(status.UDPKeepaliveResults))
+	for _, item := range status.UDPKeepaliveResults {
+		if strings.TrimSpace(item.ContentID) != "" && item.ContentID != contentID {
+			continue
+		}
+		keepaliveResults[item.TargetPeerID] = item
+	}
+	return probeResult, transferPath, peerKeepaliveResult(peer, keepaliveResults)
 }
 
 func maybeKeepAliveUDPPath(logger *logging.Logger, contentID string, peerID string, trackerURL string, selfUDPListenAddr string, remoteAddr string, now time.Time) {
@@ -482,18 +602,9 @@ func filterPeerCandidates(logger *logging.Logger, contentID string, candidates [
 
 func trackerUDPProbeBiases(client *tracker.Client, trackerURL string, contentID string, statusCache *trackerStatusCache) map[string]float64 {
 	now := time.Now()
-	if statusCache != nil {
-		if cached, ok := statusCache.Load(trackerURL, now); ok {
-			return buildTrackerUDPPeerBiases(cached, contentID, now)
-		}
-	}
-
-	status, err := client.GetStatus(context.Background())
-	if err != nil {
+	status, ok := loadTrackerStatus(client, trackerURL, statusCache, now)
+	if !ok {
 		return map[string]float64{}
-	}
-	if statusCache != nil {
-		statusCache.Store(trackerURL, status, now)
 	}
 	return buildTrackerUDPPeerBiases(status, contentID, now)
 }
