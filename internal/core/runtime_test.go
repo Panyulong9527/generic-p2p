@@ -98,6 +98,40 @@ func TestRuntimeStatsPersistsActiveDownloads(t *testing.T) {
 	}
 }
 
+func TestRuntimeStatsPersistsRecentSelectionDecisions(t *testing.T) {
+	dir := t.TempDir()
+
+	stats, err := OpenRuntimeStats(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := SelectionDecision{
+		PieceIndex:        5,
+		SelectedPeerID:    "peer-tcp",
+		SelectedTransport: "tcp",
+		SelectedScore:     1.35,
+		TopUDPPeerID:      "udp://peer-a",
+		TopUDPScore:       1.10,
+		Reason:            "selected_tcp_over_lower_udp_score",
+		RecordedAt:        time.Unix(1700000200, 0).Format(time.RFC3339),
+	}
+	if err := stats.RecordSelectionDecision(decision); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := OpenRuntimeStats(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := reopened.Snapshot()
+	if len(snapshot.RecentDecisions) != 1 {
+		t.Fatalf("expected one recent decision, got %+v", snapshot.RecentDecisions)
+	}
+	if snapshot.RecentDecisions[0].Reason != decision.Reason || snapshot.RecentDecisions[0].TopUDPPeerID != decision.TopUDPPeerID {
+		t.Fatalf("unexpected recent decision: %+v", snapshot.RecentDecisions[0])
+	}
+}
+
 func TestRuntimeStatsRateFallsToZeroAfterWindow(t *testing.T) {
 	dir := t.TempDir()
 

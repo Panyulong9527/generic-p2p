@@ -128,6 +128,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
+		recordSelectionDecision(store, pieceIndex, selected, peerCandidates)
 		attemptCandidates := pieceAttemptCandidates(pieceIndex, selected, peerCandidates)
 		var data []byte
 		var usedCandidate scheduler.PeerCandidate
@@ -253,6 +254,59 @@ func pieceAttemptCandidates(pieceIndex int, selected scheduler.PeerCandidate, pe
 		alternatives = alternatives[:2]
 	}
 	return append(attempts, alternatives...)
+}
+
+func recordSelectionDecision(store *core.PieceStore, pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) {
+	runtime := store.RuntimeStats()
+	if runtime == nil {
+		return
+	}
+	decision := core.SelectionDecision{
+		PieceIndex:        pieceIndex,
+		SelectedPeerID:    selected.PeerID,
+		SelectedTransport: selected.Transport,
+		SelectedScore:     selected.Score,
+		Reason:            selectionReason(pieceIndex, selected, peerCandidates),
+		RecordedAt:        time.Now().Format(time.RFC3339),
+	}
+	if topUDP, ok := topUDPCandidateForPiece(pieceIndex, peerCandidates); ok {
+		decision.TopUDPPeerID = topUDP.PeerID
+		decision.TopUDPScore = topUDP.Score
+	}
+	_ = runtime.RecordSelectionDecision(decision)
+}
+
+func selectionReason(pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) string {
+	if selected.Transport == "udp" {
+		return "selected_udp_best_score"
+	}
+	if topUDP, ok := topUDPCandidateForPiece(pieceIndex, peerCandidates); ok {
+		if topUDP.Score < selected.Score {
+			return "selected_tcp_over_lower_udp_score"
+		}
+		return "selected_tcp_over_udp_candidate"
+	}
+	return "selected_tcp_no_udp_candidate"
+}
+
+func topUDPCandidateForPiece(pieceIndex int, peerCandidates []scheduler.PeerCandidate) (scheduler.PeerCandidate, bool) {
+	var (
+		best scheduler.PeerCandidate
+		ok   bool
+	)
+	for _, candidate := range peerCandidates {
+		if candidate.Transport != "udp" {
+			continue
+		}
+		if pieceIndex >= 0 && !core.ContainsPiece(candidate.HaveRanges, pieceIndex) {
+			continue
+		}
+		if !ok || candidate.Score > best.Score || (candidate.Score == best.Score && candidate.PendingCount < best.PendingCount) || (candidate.Score == best.Score && candidate.PendingCount == best.PendingCount && candidate.PeerID < best.PeerID) {
+			best = candidate
+			ok = true
+		}
+	}
+	return best, ok
 }
 
 func reportTrackerTransferPath(logger *logging.Logger, discovery peerDiscoveryOptions, contentID string, candidate scheduler.PeerCandidate) {

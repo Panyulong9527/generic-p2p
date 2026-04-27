@@ -25,6 +25,7 @@ type RuntimeData struct {
 	PathStats       PathStats            `json:"pathStats"`
 	PeerStats       map[string]PeerStats `json:"peerStats,omitempty"`
 	ActiveDownloads []ActiveDownload     `json:"activeDownloads,omitempty"`
+	RecentDecisions []SelectionDecision  `json:"recentDecisions,omitempty"`
 	DownloadSamples []transferSample     `json:"downloadSamples,omitempty"`
 	UploadSamples   []transferSample     `json:"uploadSamples,omitempty"`
 }
@@ -41,6 +42,17 @@ type ActiveDownload struct {
 	PeerID     string `json:"peerId"`
 	WorkerID   int    `json:"workerId"`
 	StartedAt  string `json:"startedAt"`
+}
+
+type SelectionDecision struct {
+	PieceIndex        int     `json:"pieceIndex"`
+	SelectedPeerID    string  `json:"selectedPeerId"`
+	SelectedTransport string  `json:"selectedTransport"`
+	SelectedScore     float64 `json:"selectedScore"`
+	TopUDPPeerID      string  `json:"topUdpPeerId,omitempty"`
+	TopUDPScore       float64 `json:"topUdpScore,omitempty"`
+	Reason            string  `json:"reason"`
+	RecordedAt        string  `json:"recordedAt"`
 }
 
 type transferSample struct {
@@ -123,6 +135,17 @@ func (r *RuntimeStats) StartDownload(pieceIndex int, peerID string, workerID int
 		}
 		return r.data.ActiveDownloads[i].PieceIndex < r.data.ActiveDownloads[j].PieceIndex
 	})
+	return r.saveLocked()
+}
+
+func (r *RuntimeStats) RecordSelectionDecision(decision SelectionDecision) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.data.RecentDecisions = append(r.data.RecentDecisions, decision)
+	if len(r.data.RecentDecisions) > 20 {
+		r.data.RecentDecisions = append([]SelectionDecision(nil), r.data.RecentDecisions[len(r.data.RecentDecisions)-20:]...)
+	}
 	return r.saveLocked()
 }
 
@@ -229,6 +252,9 @@ func cloneRuntimeData(input RuntimeData) RuntimeData {
 	output := input
 	if len(input.ActiveDownloads) > 0 {
 		output.ActiveDownloads = append([]ActiveDownload(nil), input.ActiveDownloads...)
+	}
+	if len(input.RecentDecisions) > 0 {
+		output.RecentDecisions = append([]SelectionDecision(nil), input.RecentDecisions...)
 	}
 	if len(input.DownloadSamples) > 0 {
 		output.DownloadSamples = append([]transferSample(nil), input.DownloadSamples...)

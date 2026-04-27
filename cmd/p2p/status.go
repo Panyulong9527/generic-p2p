@@ -114,6 +114,34 @@ func printPrettyStatus(status core.StoreStatus) {
 			)
 		}
 	}
+	if len(status.RecentDecisions) > 0 {
+		fmt.Println("recentDecisions")
+		for _, decision := range status.RecentDecisions {
+			if decision.TopUDPPeerID != "" {
+				fmt.Printf(
+					"  piece=%d selected=%s(%s score=%.2f) topUdp=%s(score=%.2f) reason=%s at=%s\n",
+					decision.PieceIndex,
+					decision.SelectedPeerID,
+					decision.SelectedTransport,
+					decision.SelectedScore,
+					decision.TopUDPPeerID,
+					decision.TopUDPScore,
+					decision.Reason,
+					decision.RecordedAt,
+				)
+				continue
+			}
+			fmt.Printf(
+				"  piece=%d selected=%s(%s score=%.2f) reason=%s at=%s\n",
+				decision.PieceIndex,
+				decision.SelectedPeerID,
+				decision.SelectedTransport,
+				decision.SelectedScore,
+				decision.Reason,
+				decision.RecordedAt,
+			)
+		}
+	}
 
 	if len(status.PeerStats) == 0 {
 		fmt.Println("peerStats none")
