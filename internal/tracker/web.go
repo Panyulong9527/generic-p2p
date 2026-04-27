@@ -761,6 +761,7 @@ const webAppHTML = `<!doctype html>
       const udpProbeResults = status.udpProbeResults || [];
       const peerTransferPaths = status.peerTransferPaths || [];
       const udpKeepaliveResults = status.udpKeepaliveResults || [];
+      const udpBurstProfiles = status.udpBurstProfiles || [];
       const udpProbeResultMap = Object.fromEntries(
         udpProbeResults.map((item) => [item.targetPeerId || "", item])
       );
@@ -769,6 +770,9 @@ const webAppHTML = `<!doctype html>
       );
       const udpKeepaliveResultMap = Object.fromEntries(
         udpKeepaliveResults.map((item) => [item.targetPeerId || "", item])
+      );
+      const udpBurstProfileMap = Object.fromEntries(
+        udpBurstProfiles.map((item) => [item.targetPeerId || "", item])
       );
       const routeDriftSummary = summarizeRouteDrift(swarms, udpProbeResultMap, peerTransferPathMap);
       const fallbackSummary = summarizeFallbackActive(swarms, udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap);
@@ -785,8 +789,8 @@ const webAppHTML = `<!doctype html>
             '<br><span class="meta-inline">udp miss ' + swarmRouteSummary.udpMiss + ' / udp recovered ' + swarmRouteSummary.udpRecovered + ' / aligned ' + swarmRouteSummary.aligned + '</span>' +
             '<br><span class="meta-inline">udp fallback active ' + swarmFallbackActive + '</span>' +
             formatSwarmOffenders(offenders) +
-            '<div class="subsection">' +
-              renderSwarmPeers(swarm.peers || [], udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap) +
+              '<div class="subsection">' +
+              renderSwarmPeers(swarm.peers || [], udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap, udpBurstProfileMap) +
             '</div>' +
           '</div>'
             );
@@ -835,6 +839,21 @@ const webAppHTML = `<!doctype html>
             ).join("") +
           '</div>'
         : '';
+      const udpBurstHTML = udpBurstProfiles.length
+        ? '<div class="subsection">' +
+            '<h3>UDP Burst Profiles</h3>' +
+            udpBurstProfiles.map((item) =>
+              '<div class="swarm">' +
+                '<strong>' + escapeHTML(item.targetPeerId || "peer") + '</strong> ' + formatBurstProfileChip(item) + '<br>' +
+                'last outcome ' + escapeHTML(item.lastOutcome || "-") +
+                '<br>last outcome at ' + escapeHTML(item.lastOutcomeAt || "-") +
+                '<br>reported at ' + formatTimestamp(item.lastReportedAt) +
+                '<br>failures ' + Number(item.failureCount || 0) +
+                '<br>content ' + escapeHTML(shortContentId(item.contentId || "-")) +
+              '</div>'
+            ).join("") +
+          '</div>'
+        : '';
 
       trackerStatusEl.innerHTML =
         '<div class="metric-row">' +
@@ -851,6 +870,11 @@ const webAppHTML = `<!doctype html>
           '<div class="metric"><strong>' + (status.recentUdpKeepaliveSuccesses || 0) + '</strong><span>UDP keepalive success</span></div>' +
           '<div class="metric"><strong>' + (status.recentUdpKeepaliveFailures || 0) + '</strong><span>UDP keepalive failure</span></div>' +
           '<div class="metric"><strong>' + udpKeepaliveResults.length + '</strong><span>tracked warm paths</span></div>' +
+        '</div>' +
+        '<div class="metric-row">' +
+          '<div class="metric"><strong>' + udpBurstProfiles.length + '</strong><span>udp burst profiles</span></div>' +
+          '<div class="metric"><strong>' + countBurstProfilesByName(udpBurstProfiles, "aggressive") + '</strong><span>aggressive burst</span></div>' +
+          '<div class="metric"><strong>' + countBurstProfilesByName(udpBurstProfiles, "warm") + '</strong><span>warm burst</span></div>' +
         '</div>' +
         '<div class="metric-row">' +
           '<div class="metric"><strong>' + status.cleanupIntervalSeconds + 's</strong><span>cleanup interval</span></div>' +
@@ -870,6 +894,7 @@ const webAppHTML = `<!doctype html>
         pendingHTML +
         udpResultHTML +
         udpKeepaliveHTML +
+        udpBurstHTML +
         swarmHTML;
     }
 
@@ -883,15 +908,16 @@ const webAppHTML = `<!doctype html>
       return peers.map((peer) => escapeHTML(peer.peerId || "peer")).join(", ");
     }
 
-    function renderSwarmPeers(peers, udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap) {
+    function renderSwarmPeers(peers, udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap, udpBurstProfileMap) {
       if (!peers.length) return '<div class="empty">No peers</div>';
       return peers.map((peer) => {
         const result = udpProbeResultMap[peer.peerId || ""] || null;
         const transfer = peerTransferPathMap[peer.peerId || ""] || null;
         const route = peerRouteAdvice(peer, result);
         const fallback = peerFallbackState(peer, route, transfer, udpKeepaliveResultMap);
+        const burstProfile = udpBurstProfileMap[peer.peerId || ""] || null;
         return '<div class="swarm">' +
-          '<strong>' + escapeHTML(peer.peerId || "peer") + '</strong> ' + formatProbeResultChip(result) + ' ' + formatRouteChip(route) + ' ' + formatRouteDriftChip(route, transfer) + ' ' + formatFallbackChip(fallback) + '<br>' +
+          '<strong>' + escapeHTML(peer.peerId || "peer") + '</strong> ' + formatProbeResultChip(result) + ' ' + formatRouteChip(route) + ' ' + formatRouteDriftChip(route, transfer) + ' ' + formatFallbackChip(fallback) + ' ' + formatBurstProfileChip(burstProfile) + '<br>' +
           'actual ' + formatActualPathChip(transfer) + pathTotalsSuffix(transfer) +
           'udp ' + escapeHTML((peer.udpAddrs || []).join(",") || "-") +
           '<br>observed ' + escapeHTML(peer.observedUdpAddr || "-") +
@@ -941,6 +967,23 @@ const webAppHTML = `<!doctype html>
         return '<span class="chip chip-fail">' + escapeHTML(kind || "keepalive fail") + '</span>';
       }
       return '<span class="chip chip-idle">no result</span>';
+    }
+
+    function formatBurstProfileChip(item) {
+      if (!item || !item.profile) {
+        return '';
+      }
+      if (item.profile === "aggressive") {
+        return '<span class="chip chip-fail">burst aggressive</span>';
+      }
+      if (item.profile === "warm") {
+        return '<span class="chip chip-ok">burst warm</span>';
+      }
+      return '<span class="chip chip-info">burst default</span>';
+    }
+
+    function countBurstProfilesByName(items, profile) {
+      return (items || []).filter((item) => String(item.profile || "") === profile).length;
     }
 
     function formatRouteChip(advice) {

@@ -29,6 +29,7 @@ func downloadPieces(logger *logging.Logger, manifest *core.ContentManifest, stor
 	trackerStatus := newTrackerStatusCache(time.Second)
 	udpProbes := newUDPProbeCache(2 * time.Second)
 	udpProbeRequests := newUDPProbeRequestCache(3 * time.Second)
+	udpBurstReports := newUDPBurstProfileReportCache()
 	peerLoad := newPeerLoadState()
 	peerUsage := newPeerUsageState()
 
@@ -60,7 +61,7 @@ func downloadPieces(logger *logging.Logger, manifest *core.ContentManifest, stor
 				}
 				if runtime := store.RuntimeStats(); runtime != nil {
 					_ = runtime.SetPeers(len(peerCandidates))
-					syncRuntimeUDPBurstProfiles(store, manifest.ContentID)
+					syncRuntimeUDPBurstProfiles(logger, store, discovery, manifest.ContentID, udpBurstReports)
 				}
 
 				pieceIndex, ok := reserveNextPiece(manifest, store, state, peerCandidates)
@@ -72,7 +73,7 @@ func downloadPieces(logger *logging.Logger, manifest *core.ContentManifest, stor
 					continue
 				}
 
-				err = downloadSinglePiece(logger, manifest, store, discovery, pieceIndex, id, peerHealth, discoveryCache, trackerStatus, udpProbes, udpProbeRequests, peerLoad, peerUsage)
+				err = downloadSinglePiece(logger, manifest, store, discovery, pieceIndex, id, peerHealth, discoveryCache, trackerStatus, udpProbes, udpProbeRequests, udpBurstReports, peerLoad, peerUsage)
 
 				state.mu.Lock()
 				delete(state.inProgress, pieceIndex)
@@ -104,7 +105,7 @@ func downloadPieces(logger *logging.Logger, manifest *core.ContentManifest, stor
 	}
 }
 
-func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest, store *core.PieceStore, discovery peerDiscoveryOptions, pieceIndex int, workerID int, peerHealth *peerHealthState, discoveryCache *peerDiscoveryCache, trackerStatus *trackerStatusCache, udpProbes *udpProbeCache, udpProbeRequests *udpProbeRequestCache, peerLoad *peerLoadState, peerUsage *peerUsageState) error {
+func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest, store *core.PieceStore, discovery peerDiscoveryOptions, pieceIndex int, workerID int, peerHealth *peerHealthState, discoveryCache *peerDiscoveryCache, trackerStatus *trackerStatusCache, udpProbes *udpProbeCache, udpProbeRequests *udpProbeRequestCache, udpBurstReports *udpBurstProfileReportCache, peerLoad *peerLoadState, peerUsage *peerUsageState) error {
 	chooser := scheduler.Scheduler{}
 	excluded := make(map[string]bool)
 
@@ -119,7 +120,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 		}
 		if runtime := store.RuntimeStats(); runtime != nil {
 			_ = runtime.SetPeers(len(peerCandidates))
-			syncRuntimeUDPBurstProfiles(store, manifest.ContentID)
+			syncRuntimeUDPBurstProfiles(logger, store, discovery, manifest.ContentID, udpBurstReports)
 		}
 
 		selected, ok := chooser.ChoosePeer(pieceIndex, peerCandidates)
@@ -278,12 +279,48 @@ func recordSelectionDecision(store *core.PieceStore, pieceIndex int, selected sc
 	_ = runtime.RecordSelectionDecision(decision)
 }
 
-func syncRuntimeUDPBurstProfiles(store *core.PieceStore, contentID string) {
+func syncRuntimeUDPBurstProfiles(logger *logging.Logger, store *core.PieceStore, discovery peerDiscoveryOptions, contentID string, reportCache *udpBurstProfileReportCache) {
 	runtime := store.RuntimeStats()
 	if runtime == nil {
 		return
 	}
-	_ = runtime.SetUDPBurstProfiles(currentUDPBurstProfiles(contentID, time.Now()))
+	profiles := currentUDPBurstProfiles(contentID, time.Now())
+	_ = runtime.SetUDPBurstProfiles(profiles)
+	reportTrackerUDPBurstProfiles(logger, discovery, contentID, profiles, reportCache)
+}
+
+func reportTrackerUDPBurstProfiles(logger *logging.Logger, discovery peerDiscoveryOptions, contentID string, profiles []core.UDPBurstProfileStatus, reportCache *udpBurstProfileReportCache) {
+	if strings.TrimSpace(discovery.trackerURL) == "" || len(profiles) == 0 {
+		return
+	}
+	client := tracker.NewClient(discovery.trackerURL)
+	for _, profile := range profiles {
+		if strings.TrimSpace(profile.PeerID) == "" || strings.TrimSpace(profile.Profile) == "" {
+			continue
+		}
+		key := contentID + "|" + profile.PeerID
+		fingerprint := profile.Profile + "|" + profile.LastSuccessAt + "|" + profile.LastFailureAt + "|" + fmt.Sprintf("%d", profile.FailureCount)
+		if !reportCache.ShouldReport(key, fingerprint) {
+			continue
+		}
+		lastOutcome := "unknown"
+		lastOutcomeAt := ""
+		if profile.LastFailureAt != "" && (profile.LastSuccessAt == "" || profile.LastFailureAt > profile.LastSuccessAt) {
+			lastOutcome = "failure"
+			lastOutcomeAt = profile.LastFailureAt
+		} else if profile.LastSuccessAt != "" {
+			lastOutcome = "success"
+			lastOutcomeAt = profile.LastSuccessAt
+		}
+		if err := client.ReportUDPBurstProfile(context.Background(), profile.PeerID, contentID, profile.Profile, lastOutcome, profile.FailureCount, lastOutcomeAt); err != nil {
+			logger.Error("tracker_udp_burst_profile_report_failed",
+				"contentId", contentID,
+				"peerId", profile.PeerID,
+				"profile", profile.Profile,
+				"error", err.Error(),
+			)
+		}
+	}
 }
 
 func selectionReason(pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) string {

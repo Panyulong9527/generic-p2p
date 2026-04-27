@@ -268,6 +268,9 @@ func TestTrackerStatusIncludesSwarmDetails(t *testing.T) {
 	if err := client.ReportUDPKeepaliveResult(ctx, "udp://127.0.0.1:9004", "sha256-demo", false, "udp_timeout"); err != nil {
 		t.Fatal(err)
 	}
+	if err := client.ReportUDPBurstProfile(ctx, "peer-a", "sha256-demo", "aggressive", "failure", 2, time.Unix(1700000400, 0).Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
 	status, err = client.GetStatus(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -295,6 +298,12 @@ func TestTrackerStatusIncludesSwarmDetails(t *testing.T) {
 	}
 	if status.UDPKeepaliveResults[0].LastErrorKind != "udp_timeout" {
 		t.Fatalf("unexpected udp keepalive error kind: %#v", status.UDPKeepaliveResults[0])
+	}
+	if len(status.UDPBurstProfiles) != 1 || status.UDPBurstProfiles[0].TargetPeerID != "peer-a" {
+		t.Fatalf("unexpected udp burst profiles: %#v", status.UDPBurstProfiles)
+	}
+	if status.UDPBurstProfiles[0].Profile != "aggressive" || status.UDPBurstProfiles[0].FailureCount != 2 {
+		t.Fatalf("unexpected udp burst profile payload: %#v", status.UDPBurstProfiles[0])
 	}
 }
 
