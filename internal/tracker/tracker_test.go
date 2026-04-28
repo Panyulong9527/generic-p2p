@@ -271,6 +271,9 @@ func TestTrackerStatusIncludesSwarmDetails(t *testing.T) {
 	if err := client.ReportUDPBurstProfile(ctx, "peer-a", "sha256-demo", "aggressive", "failure", "piece", 2, time.Unix(1700000400, 0).Format(time.RFC3339)); err != nil {
 		t.Fatal(err)
 	}
+	if err := client.ReportUDPDecision(ctx, "peer-a", "sha256-demo", "aggressive", "piece", 5, 5700, 1.42, "selected_udp_best_score"); err != nil {
+		t.Fatal(err)
+	}
 	status, err = client.GetStatus(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -307,6 +310,12 @@ func TestTrackerStatusIncludesSwarmDetails(t *testing.T) {
 	}
 	if status.UDPBurstProfiles[0].LastStage != "piece" {
 		t.Fatalf("unexpected udp burst profile payload: %#v", status.UDPBurstProfiles[0])
+	}
+	if len(status.UDPDecisions) != 1 || status.UDPDecisions[0].TargetPeerID != "peer-a" {
+		t.Fatalf("unexpected udp decisions: %#v", status.UDPDecisions)
+	}
+	if status.UDPDecisions[0].BurstProfile != "aggressive" || status.UDPDecisions[0].LastStage != "piece" || status.UDPDecisions[0].UDPBudget != 5 || status.UDPDecisions[0].UDPTimeoutMs != 5700 {
+		t.Fatalf("unexpected udp decision payload: %#v", status.UDPDecisions[0])
 	}
 }
 

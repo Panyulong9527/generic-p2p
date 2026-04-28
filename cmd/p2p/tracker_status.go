@@ -77,7 +77,7 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 	udpMiss, udpRecovered, aligned := summarizeTrackerRouteDrift(status)
 	fallbackActive := summarizeTrackerFallbackActive(status)
 	fmt.Printf(
-		"tracker peers=%d swarms=%d pendingUdpProbes=%d udpProbeSuccess=%d udpProbeFailure=%d udpKeepaliveSuccess=%d udpKeepaliveFailure=%d udpBurstProfiles=%d udpMiss=%d udpRecovered=%d routeAligned=%d udpFallbackActive=%d peerTTL=%ds cleanup=%ds\n",
+		"tracker peers=%d swarms=%d pendingUdpProbes=%d udpProbeSuccess=%d udpProbeFailure=%d udpKeepaliveSuccess=%d udpKeepaliveFailure=%d udpBurstProfiles=%d udpDecisions=%d udpMiss=%d udpRecovered=%d routeAligned=%d udpFallbackActive=%d peerTTL=%ds cleanup=%ds\n",
 		status.PeerCount,
 		status.SwarmCount,
 		status.PendingUDPProbeCount,
@@ -86,6 +86,7 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 		status.RecentUDPKeepaliveSuccesses,
 		status.RecentUDPKeepaliveFailures,
 		len(status.UDPBurstProfiles),
+		len(status.UDPDecisions),
 		udpMiss,
 		udpRecovered,
 		aligned,
@@ -201,6 +202,31 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 			)
 		}
 	}
+	if len(status.UDPDecisions) > 0 {
+		fmt.Println("udpDecisions")
+		items := append([]tracker.UDPDecisionStatus(nil), status.UDPDecisions...)
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].LastReportedAt != items[j].LastReportedAt {
+				return items[i].LastReportedAt > items[j].LastReportedAt
+			}
+			return items[i].TargetPeerID < items[j].TargetPeerID
+		})
+		for _, item := range items {
+			fmt.Printf(
+				"  %s burst=%s stage=%s budget=%d timeout=%dms score=%.2f reports=%d reason=%s content=%s reportedAt=%s\n",
+				item.TargetPeerID,
+				emptyDash(item.BurstProfile),
+				emptyDash(item.LastStage),
+				item.UDPBudget,
+				item.UDPTimeoutMs,
+				item.SelectedScore,
+				item.ReportCount,
+				emptyDash(item.Reason),
+				shortContentID(item.ContentID),
+				formatUnixTime(item.LastReportedAt),
+			)
+		}
+	}
 	if len(status.Swarms) == 0 {
 		fmt.Println("swarms none")
 		return
@@ -231,6 +257,10 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 	for _, item := range status.UDPBurstProfiles {
 		udpBurstProfiles[item.TargetPeerID] = item
 	}
+	udpDecisions := make(map[string]tracker.UDPDecisionStatus, len(status.UDPDecisions))
+	for _, item := range status.UDPDecisions {
+		udpDecisions[item.TargetPeerID] = item
+	}
 	for _, swarm := range swarms {
 		swarmMiss, swarmRecovered, swarmAligned := summarizeSwarmRouteDrift(swarm, udpProbeResults, peerTransferPaths)
 		offenders := summarizeSwarmOffenders(swarm, udpProbeResults, peerTransferPaths)
@@ -257,8 +287,9 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 			advice := trackerPeerRouteAdvice(peer, udpProbeResults[peer.PeerID])
 			actual := peerTransferPaths[peer.PeerID]
 			fallbackState := trackerPeerFallbackState(peer, advice, actual, udpKeepaliveResults)
+			decision := udpDecisions[peer.PeerID]
 			fmt.Printf(
-				"    %s addrs=%s observed=%s udp=%s observedUdp=%s route=%s actual=%s routeDrift=%s udpFallback=%s burst=%s have=%s lastSeen=%s\n",
+				"    %s addrs=%s observed=%s udp=%s observedUdp=%s route=%s actual=%s routeDrift=%s udpFallback=%s burst=%s decision=%s have=%s lastSeen=%s\n",
 				peer.PeerID,
 				strings.Join(peer.Addrs, ","),
 				peer.ObservedAddr,
@@ -269,6 +300,7 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 				trackerRouteDrift(advice, actual.LastPath),
 				fallbackState,
 				trackerBurstProfileSummary(udpBurstProfiles[peer.PeerID]),
+				trackerUDPDecisionSummary(decision),
 				formatHaveRanges(peer.HaveRanges),
 				time.Unix(peer.LastSeenAt, 0).Format(time.RFC3339),
 			)
@@ -286,6 +318,23 @@ func trackerBurstProfileSummary(item tracker.UDPBurstProfileStatus) string {
 	}
 	if item.FailureCount > 0 {
 		summary += fmt.Sprintf("/f%d", item.FailureCount)
+	}
+	return summary
+}
+
+func trackerUDPDecisionSummary(item tracker.UDPDecisionStatus) string {
+	if strings.TrimSpace(item.TargetPeerID) == "" {
+		return "-"
+	}
+	summary := emptyDash(item.BurstProfile)
+	if strings.TrimSpace(item.LastStage) != "" {
+		summary += "/" + item.LastStage
+	}
+	if item.UDPBudget > 0 {
+		summary += fmt.Sprintf("/b%d", item.UDPBudget)
+	}
+	if item.UDPTimeoutMs > 0 {
+		summary += fmt.Sprintf("/t%dms", item.UDPTimeoutMs)
 	}
 	return summary
 }

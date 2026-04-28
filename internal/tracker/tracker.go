@@ -96,6 +96,17 @@ type ReportUDPBurstProfileRequest struct {
 	LastOutcomeAt string `json:"lastOutcomeAt,omitempty"`
 }
 
+type ReportUDPDecisionRequest struct {
+	TargetPeerID  string  `json:"targetPeerId"`
+	ContentID     string  `json:"contentId"`
+	BurstProfile  string  `json:"burstProfile,omitempty"`
+	LastStage     string  `json:"lastStage,omitempty"`
+	UDPBudget     int     `json:"udpBudget"`
+	UDPTimeoutMs  int64   `json:"udpTimeoutMs"`
+	SelectedScore float64 `json:"selectedScore"`
+	Reason        string  `json:"reason,omitempty"`
+}
+
 type SwarmStatus struct {
 	ContentID string       `json:"contentId"`
 	PeerCount int          `json:"peerCount"`
@@ -148,6 +159,19 @@ type UDPBurstProfileStatus struct {
 	LastOutcomeAt  string `json:"lastOutcomeAt,omitempty"`
 }
 
+type UDPDecisionStatus struct {
+	TargetPeerID   string  `json:"targetPeerId"`
+	ContentID      string  `json:"contentId,omitempty"`
+	BurstProfile   string  `json:"burstProfile,omitempty"`
+	LastStage      string  `json:"lastStage,omitempty"`
+	UDPBudget      int     `json:"udpBudget"`
+	UDPTimeoutMs   int64   `json:"udpTimeoutMs"`
+	SelectedScore  float64 `json:"selectedScore"`
+	Reason         string  `json:"reason,omitempty"`
+	LastReportedAt int64   `json:"lastReportedAt,omitempty"`
+	ReportCount    int     `json:"reportCount"`
+}
+
 type StatusResponse struct {
 	GeneratedAt                 string                   `json:"generatedAt"`
 	PeerCount                   int                      `json:"peerCount"`
@@ -165,6 +189,7 @@ type StatusResponse struct {
 	PeerTransferPaths           []PeerTransferPathStatus `json:"peerTransferPaths,omitempty"`
 	UDPKeepaliveResults         []UDPKeepaliveStatus     `json:"udpKeepaliveResults,omitempty"`
 	UDPBurstProfiles            []UDPBurstProfileStatus  `json:"udpBurstProfiles,omitempty"`
+	UDPDecisions                []UDPDecisionStatus      `json:"udpDecisions,omitempty"`
 	Swarms                      []SwarmStatus            `json:"swarms"`
 }
 
@@ -205,6 +230,18 @@ type udpBurstProfileSummary struct {
 	LastOutcomeAt  string
 }
 
+type udpDecisionSummary struct {
+	ContentID      string
+	BurstProfile   string
+	LastStage      string
+	UDPBudget      int
+	UDPTimeoutMs   int64
+	SelectedScore  float64
+	Reason         string
+	LastReportedAt int64
+	ReportCount    int
+}
+
 type Server struct {
 	mu               sync.Mutex
 	peers            map[string]PeerRecord
@@ -214,6 +251,7 @@ type Server struct {
 	peerTransfers    map[string]peerTransferPathSummary
 	udpKeepalives    map[string]udpKeepaliveSummary
 	udpBurstProfiles map[string]udpBurstProfileSummary
+	udpDecisions     map[string]udpDecisionSummary
 	peerTTL          time.Duration
 	cleanupInterval  time.Duration
 	statePath        string
@@ -232,6 +270,7 @@ func NewServer() *Server {
 		peerTransfers:    make(map[string]peerTransferPathSummary),
 		udpKeepalives:    make(map[string]udpKeepaliveSummary),
 		udpBurstProfiles: make(map[string]udpBurstProfileSummary),
+		udpDecisions:     make(map[string]udpDecisionSummary),
 		peerTTL:          10 * time.Second,
 		cleanupInterval:  2 * time.Second,
 		webDataDir:       defaultWebDataDir,
@@ -262,6 +301,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/udp/probes/report", s.handleReportUDPProbeResult)
 	mux.HandleFunc("/v1/udp/keepalives/report", s.handleReportUDPKeepaliveResult)
 	mux.HandleFunc("/v1/udp/burst-profiles/report", s.handleReportUDPBurstProfile)
+	mux.HandleFunc("/v1/udp/decisions/report", s.handleReportUDPDecision)
 	mux.HandleFunc("/v1/transfers/report", s.handleReportTransferPath)
 	mux.HandleFunc("/v1/swarms/join", s.handleJoin)
 	mux.HandleFunc("/v1/swarms/", s.handleGetPeers)
@@ -627,6 +667,41 @@ func (s *Server) handleReportUDPBurstProfile(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
+func (s *Server) handleReportUDPDecision(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req ReportUDPDecisionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.TargetPeerID) == "" || strings.TrimSpace(req.ContentID) == "" {
+		http.Error(w, "targetPeerId and contentId are required", http.StatusBadRequest)
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneExpiredLocked(time.Now())
+
+	summary := s.udpDecisions[req.TargetPeerID]
+	summary.ContentID = req.ContentID
+	summary.BurstProfile = req.BurstProfile
+	summary.LastStage = req.LastStage
+	summary.UDPBudget = req.UDPBudget
+	summary.UDPTimeoutMs = req.UDPTimeoutMs
+	summary.SelectedScore = req.SelectedScore
+	summary.Reason = req.Reason
+	summary.LastReportedAt = time.Now().Unix()
+	summary.ReportCount++
+	s.udpDecisions[req.TargetPeerID] = summary
+
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
 func (s *Server) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(s.cleanupInterval)
 	defer ticker.Stop()
@@ -672,6 +747,7 @@ func (s *Server) Status() StatusResponse {
 		PeerTransferPaths:      make([]PeerTransferPathStatus, 0, len(s.peerTransfers)),
 		UDPKeepaliveResults:    make([]UDPKeepaliveStatus, 0, len(s.udpKeepalives)),
 		UDPBurstProfiles:       make([]UDPBurstProfileStatus, 0, len(s.udpBurstProfiles)),
+		UDPDecisions:           make([]UDPDecisionStatus, 0, len(s.udpDecisions)),
 		PeerTTLSeconds:         int(s.peerTTL / time.Second),
 		CleanupIntervalSeconds: int(s.cleanupInterval / time.Second),
 		StatePath:              s.statePath,
@@ -752,6 +828,20 @@ func (s *Server) Status() StatusResponse {
 			LastOutcomeAt:  summary.LastOutcomeAt,
 		})
 	}
+	for targetPeerID, summary := range s.udpDecisions {
+		response.UDPDecisions = append(response.UDPDecisions, UDPDecisionStatus{
+			TargetPeerID:   targetPeerID,
+			ContentID:      summary.ContentID,
+			BurstProfile:   summary.BurstProfile,
+			LastStage:      summary.LastStage,
+			UDPBudget:      summary.UDPBudget,
+			UDPTimeoutMs:   summary.UDPTimeoutMs,
+			SelectedScore:  summary.SelectedScore,
+			Reason:         summary.Reason,
+			LastReportedAt: summary.LastReportedAt,
+			ReportCount:    summary.ReportCount,
+		})
+	}
 
 	return response
 }
@@ -776,6 +866,7 @@ func (s *Server) pruneExpiredLocked(now time.Time) {
 		delete(s.peerTransfers, peerID)
 		delete(s.udpKeepalives, peerID)
 		delete(s.udpBurstProfiles, peerID)
+		delete(s.udpDecisions, peerID)
 		for contentID, peerSet := range s.swarms {
 			delete(peerSet, peerID)
 			if len(peerSet) == 0 {
@@ -1031,6 +1122,20 @@ func (c *Client) ReportUDPBurstProfile(ctx context.Context, targetPeerID string,
 		LastOutcomeAt: lastOutcomeAt,
 	}
 	return c.postJSON(ctx, "/v1/udp/burst-profiles/report", reqBody, nil)
+}
+
+func (c *Client) ReportUDPDecision(ctx context.Context, targetPeerID string, contentID string, burstProfile string, lastStage string, udpBudget int, udpTimeoutMs int64, selectedScore float64, reason string) error {
+	reqBody := ReportUDPDecisionRequest{
+		TargetPeerID:  targetPeerID,
+		ContentID:     contentID,
+		BurstProfile:  burstProfile,
+		LastStage:     lastStage,
+		UDPBudget:     udpBudget,
+		UDPTimeoutMs:  udpTimeoutMs,
+		SelectedScore: selectedScore,
+		Reason:        reason,
+	}
+	return c.postJSON(ctx, "/v1/udp/decisions/report", reqBody, nil)
 }
 
 func (c *Client) GetStatus(ctx context.Context) (StatusResponse, error) {
