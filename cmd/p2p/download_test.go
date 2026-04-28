@@ -125,13 +125,27 @@ func TestUDPAttemptBudgetAdjustsByLastStage(t *testing.T) {
 }
 
 func TestUDPPieceTimeoutVariesByBurstProfile(t *testing.T) {
-	if got := udpPieceTimeout(scheduler.PeerCandidate{Transport: "udp", BurstProfile: "warm"}); got != 3500*time.Millisecond {
+	if got := udpPieceTimeout("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "warm"}); got != 3500*time.Millisecond {
 		t.Fatalf("expected warm timeout 3.5s, got %s", got)
 	}
-	if got := udpPieceTimeout(scheduler.PeerCandidate{Transport: "udp", BurstProfile: "aggressive"}); got != 5500*time.Millisecond {
+	if got := udpPieceTimeout("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "aggressive"}); got != 5500*time.Millisecond {
 		t.Fatalf("expected aggressive timeout 5.5s, got %s", got)
 	}
-	if got := udpPieceTimeout(scheduler.PeerCandidate{Transport: "udp"}); got != 4500*time.Millisecond {
+	if got := udpPieceTimeout("", scheduler.PeerCandidate{Transport: "udp"}); got != 4500*time.Millisecond {
 		t.Fatalf("expected default timeout 4.5s, got %s", got)
+	}
+}
+
+func TestUDPPieceTimeoutAdjustsByLastStage(t *testing.T) {
+	now := time.Now()
+	const contentID = "sha256-download-timeout-stage"
+	recordUDPBurstOutcome(contentID, "udp://probe-timeout-peer", "aggressive", "probe", false, now.Add(-2*time.Second))
+	recordUDPBurstOutcome(contentID, "udp://piece-timeout-peer", "default", "piece", false, now.Add(-2*time.Second))
+
+	if got := udpPieceTimeout(contentID, scheduler.PeerCandidate{Transport: "udp", PeerID: "udp://probe-timeout-peer", BurstProfile: "aggressive"}); got != 4600*time.Millisecond {
+		t.Fatalf("expected probe-stage timeout to tighten to 4.6s, got %s", got)
+	}
+	if got := udpPieceTimeout(contentID, scheduler.PeerCandidate{Transport: "udp", PeerID: "udp://piece-timeout-peer", BurstProfile: "default"}); got != 5700*time.Millisecond {
+		t.Fatalf("expected piece-stage timeout to widen to 5.7s, got %s", got)
 	}
 }

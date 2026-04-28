@@ -212,7 +212,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 func fetchPieceFromCandidate(candidate scheduler.PeerCandidate, contentID string, pieceIndex int, selfUDPListenAddr string) ([]byte, error) {
 	switch candidate.Transport {
 	case "udp":
-		return p2pnet.NewUDPClient(candidate.Addr, udpPieceTimeout(candidate)).WithLocalAddr(selfUDPListenAddr).FetchPiece(contentID, pieceIndex)
+		return p2pnet.NewUDPClient(candidate.Addr, udpPieceTimeout(contentID, candidate)).WithLocalAddr(selfUDPListenAddr).FetchPiece(contentID, pieceIndex)
 	default:
 		addr := candidate.Addr
 		if addr == "" {
@@ -311,14 +311,36 @@ func currentUDPBurstStageForPeer(contentID string, peerID string, now time.Time)
 	return currentUDPBurstStage(stats)
 }
 
-func udpPieceTimeout(selected scheduler.PeerCandidate) time.Duration {
-	switch selected.BurstProfile {
+func udpPieceTimeout(contentID string, selected scheduler.PeerCandidate) time.Duration {
+	base := udpPieceTimeoutForProfile(selected.BurstProfile)
+	stage := currentUDPBurstStageForPeer(contentID, selected.PeerID, time.Now())
+	return stageAdjustedUDPPieceTimeout(base, stage)
+}
+
+func udpPieceTimeoutForProfile(profile string) time.Duration {
+	switch strings.TrimSpace(profile) {
 	case "aggressive":
 		return 5500 * time.Millisecond
 	case "warm":
 		return 3500 * time.Millisecond
 	default:
 		return 4500 * time.Millisecond
+	}
+}
+
+func stageAdjustedUDPPieceTimeout(base time.Duration, stage string) time.Duration {
+	switch strings.TrimSpace(stage) {
+	case "probe":
+		if base > 900*time.Millisecond {
+			return base - 900*time.Millisecond
+		}
+		return base
+	case "have":
+		return base
+	case "piece":
+		return base + 1200*time.Millisecond
+	default:
+		return base
 	}
 }
 
