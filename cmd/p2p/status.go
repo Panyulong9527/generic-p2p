@@ -118,6 +118,24 @@ func printPrettyStatus(status core.StoreStatus) {
 		fmt.Println("recentDecisions")
 		for _, decision := range status.RecentDecisions {
 			if decision.TopUDPPeerID != "" {
+				if decision.SelectedTransport == "udp" {
+					fmt.Printf(
+						"  piece=%d selected=%s(%s score=%.2f burst=%s stage=%s budget=%d timeout=%dms) topUdp=%s(score=%.2f) reason=%s at=%s\n",
+						decision.PieceIndex,
+						decision.SelectedPeerID,
+						decision.SelectedTransport,
+						decision.SelectedScore,
+						emptyDashStatus(decision.SelectedBurstProfile),
+						emptyDashStatus(decision.SelectedLastStage),
+						decision.SelectedUDPBudget,
+						decision.SelectedUDPTimeoutMs,
+						decision.TopUDPPeerID,
+						decision.TopUDPScore,
+						decision.Reason,
+						decision.RecordedAt,
+					)
+					continue
+				}
 				fmt.Printf(
 					"  piece=%d selected=%s(%s score=%.2f) topUdp=%s(score=%.2f) reason=%s at=%s\n",
 					decision.PieceIndex,
@@ -126,6 +144,22 @@ func printPrettyStatus(status core.StoreStatus) {
 					decision.SelectedScore,
 					decision.TopUDPPeerID,
 					decision.TopUDPScore,
+					decision.Reason,
+					decision.RecordedAt,
+				)
+				continue
+			}
+			if decision.SelectedTransport == "udp" {
+				fmt.Printf(
+					"  piece=%d selected=%s(%s score=%.2f burst=%s stage=%s budget=%d timeout=%dms) reason=%s at=%s\n",
+					decision.PieceIndex,
+					decision.SelectedPeerID,
+					decision.SelectedTransport,
+					decision.SelectedScore,
+					emptyDashStatus(decision.SelectedBurstProfile),
+					emptyDashStatus(decision.SelectedLastStage),
+					decision.SelectedUDPBudget,
+					decision.SelectedUDPTimeoutMs,
 					decision.Reason,
 					decision.RecordedAt,
 				)

@@ -357,13 +357,20 @@ func recordSelectionDecision(store *core.PieceStore, pieceIndex int, selected sc
 	if runtime == nil {
 		return
 	}
+	contentID := store.Manifest().ContentID
 	decision := core.SelectionDecision{
-		PieceIndex:        pieceIndex,
-		SelectedPeerID:    selected.PeerID,
-		SelectedTransport: selected.Transport,
-		SelectedScore:     selected.Score,
-		Reason:            selectionReason(pieceIndex, selected, peerCandidates),
-		RecordedAt:        time.Now().Format(time.RFC3339),
+		PieceIndex:           pieceIndex,
+		SelectedPeerID:       selected.PeerID,
+		SelectedTransport:    selected.Transport,
+		SelectedScore:        selected.Score,
+		SelectedBurstProfile: normalizedBurstProfile(selected.BurstProfile),
+		SelectedLastStage:    currentUDPBurstStageForPeer(contentID, selected.PeerID, time.Now()),
+		Reason:               selectionReason(pieceIndex, selected, peerCandidates),
+		RecordedAt:           time.Now().Format(time.RFC3339),
+	}
+	if selected.Transport == "udp" {
+		decision.SelectedUDPBudget = udpAttemptBudget(contentID, selected)
+		decision.SelectedUDPTimeoutMs = udpPieceTimeout(contentID, selected).Milliseconds()
 	}
 	if topUDP, ok := topUDPCandidateForPiece(pieceIndex, peerCandidates); ok {
 		decision.TopUDPPeerID = topUDP.PeerID

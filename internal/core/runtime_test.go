@@ -106,14 +106,18 @@ func TestRuntimeStatsPersistsRecentSelectionDecisions(t *testing.T) {
 		t.Fatal(err)
 	}
 	decision := SelectionDecision{
-		PieceIndex:        5,
-		SelectedPeerID:    "peer-tcp",
-		SelectedTransport: "tcp",
-		SelectedScore:     1.35,
-		TopUDPPeerID:      "udp://peer-a",
-		TopUDPScore:       1.10,
-		Reason:            "selected_tcp_over_lower_udp_score",
-		RecordedAt:        time.Unix(1700000200, 0).Format(time.RFC3339),
+		PieceIndex:           5,
+		SelectedPeerID:       "udp://peer-b",
+		SelectedTransport:    "udp",
+		SelectedScore:        1.35,
+		SelectedBurstProfile: "aggressive",
+		SelectedLastStage:    "piece",
+		SelectedUDPBudget:    5,
+		SelectedUDPTimeoutMs: 5700,
+		TopUDPPeerID:         "udp://peer-a",
+		TopUDPScore:          1.10,
+		Reason:               "selected_udp_best_score",
+		RecordedAt:           time.Unix(1700000200, 0).Format(time.RFC3339),
 	}
 	if err := stats.RecordSelectionDecision(decision); err != nil {
 		t.Fatal(err)
@@ -129,6 +133,9 @@ func TestRuntimeStatsPersistsRecentSelectionDecisions(t *testing.T) {
 	}
 	if snapshot.RecentDecisions[0].Reason != decision.Reason || snapshot.RecentDecisions[0].TopUDPPeerID != decision.TopUDPPeerID {
 		t.Fatalf("unexpected recent decision: %+v", snapshot.RecentDecisions[0])
+	}
+	if snapshot.RecentDecisions[0].SelectedBurstProfile != "aggressive" || snapshot.RecentDecisions[0].SelectedLastStage != "piece" || snapshot.RecentDecisions[0].SelectedUDPBudget != 5 || snapshot.RecentDecisions[0].SelectedUDPTimeoutMs != 5700 {
+		t.Fatalf("unexpected recent decision udp tuning: %+v", snapshot.RecentDecisions[0])
 	}
 }
 
