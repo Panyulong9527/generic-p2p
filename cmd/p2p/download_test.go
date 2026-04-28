@@ -244,3 +244,41 @@ func TestSelectionReasonSkipsPublicMappedReasonForSuppressedRisk(t *testing.T) {
 		t.Fatalf("expected low-risk reason to win, got %s", got)
 	}
 }
+
+func TestUDPPieceChunkWindowVariesByProfile(t *testing.T) {
+	if got := udpPieceChunkWindowForCandidate("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "warm"}); got != 5 {
+		t.Fatalf("expected warm chunk window 5, got %d", got)
+	}
+	if got := udpPieceChunkWindowForCandidate("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "aggressive"}); got != 3 {
+		t.Fatalf("expected aggressive chunk window 3, got %d", got)
+	}
+	if got := udpPieceChunkWindowForCandidate("", scheduler.PeerCandidate{Transport: "udp"}); got != 4 {
+		t.Fatalf("expected default chunk window 4, got %d", got)
+	}
+}
+
+func TestUDPPieceChunkWindowAdjustsByStageRiskAndPublicMapping(t *testing.T) {
+	now := time.Now()
+	const contentID = "sha256-download-window-stage"
+	recordUDPBurstOutcome(contentID, "udp://piece-window-peer", "warm", "piece", true, now.Add(-2*time.Second))
+	recordUDPBurstOutcome(contentID, "udp://probe-window-peer", "aggressive", "probe", false, now.Add(-2*time.Second))
+
+	if got := udpPieceChunkWindowForCandidate(contentID, scheduler.PeerCandidate{
+		Transport:       "udp",
+		PeerID:          "udp://piece-window-peer",
+		BurstProfile:    "warm",
+		UDPDecisionRisk: "stable",
+		UDPPublicMapped: true,
+	}); got != 8 {
+		t.Fatalf("expected warm/stable/public-mapped piece window 8, got %d", got)
+	}
+
+	if got := udpPieceChunkWindowForCandidate(contentID, scheduler.PeerCandidate{
+		Transport:       "udp",
+		PeerID:          "udp://probe-window-peer",
+		BurstProfile:    "aggressive",
+		UDPDecisionRisk: "low",
+	}); got != 1 {
+		t.Fatalf("expected aggressive/probe/low window 1, got %d", got)
+	}
+}

@@ -214,13 +214,83 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 func fetchPieceFromCandidate(candidate scheduler.PeerCandidate, contentID string, pieceIndex int, selfUDPListenAddr string) ([]byte, error) {
 	switch candidate.Transport {
 	case "udp":
-		return p2pnet.NewUDPClient(candidate.Addr, udpPieceTimeout(contentID, candidate)).WithLocalAddr(selfUDPListenAddr).FetchPiece(contentID, pieceIndex)
+		return p2pnet.NewUDPClient(candidate.Addr, udpPieceTimeout(contentID, candidate)).
+			WithLocalAddr(selfUDPListenAddr).
+			WithChunkWindow(udpPieceChunkWindowForCandidate(contentID, candidate)).
+			FetchPiece(contentID, pieceIndex)
 	default:
 		addr := candidate.Addr
 		if addr == "" {
 			addr = candidate.PeerID
 		}
 		return p2pnet.NewClient(addr, 10*time.Second).FetchPiece(contentID, pieceIndex)
+	}
+}
+
+func udpPieceChunkWindowForCandidate(contentID string, candidate scheduler.PeerCandidate) int {
+	window := udpPieceChunkWindowForProfile(candidate.BurstProfile)
+	stage := currentUDPBurstStageForPeer(contentID, candidate.PeerID, time.Now())
+	window = stageAdjustedUDPPieceChunkWindow(window, stage)
+	window = decisionRiskAdjustedUDPPieceChunkWindow(window, candidate.UDPDecisionRisk)
+	if candidate.UDPPublicMapped && !isSuppressedDecisionRisk(candidate.UDPDecisionRisk) && window < 8 {
+		window++
+	}
+	if window < 1 {
+		return 1
+	}
+	if window > 8 {
+		return 8
+	}
+	return window
+}
+
+func udpPieceChunkWindowForProfile(profile string) int {
+	switch strings.TrimSpace(profile) {
+	case "warm":
+		return 5
+	case "aggressive":
+		return 3
+	default:
+		return 4
+	}
+}
+
+func stageAdjustedUDPPieceChunkWindow(base int, stage string) int {
+	switch strings.TrimSpace(stage) {
+	case "probe":
+		if base > 1 {
+			return base - 1
+		}
+		return 1
+	case "piece":
+		if base < 8 {
+			return base + 1
+		}
+		return 8
+	default:
+		return base
+	}
+}
+
+func decisionRiskAdjustedUDPPieceChunkWindow(base int, risk string) int {
+	switch strings.TrimSpace(risk) {
+	case "low":
+		if base > 2 {
+			return base - 2
+		}
+		return 1
+	case "warn":
+		if base > 1 {
+			return base - 1
+		}
+		return 1
+	case "stable":
+		if base < 8 {
+			return base + 1
+		}
+		return 8
+	default:
+		return base
 	}
 }
 

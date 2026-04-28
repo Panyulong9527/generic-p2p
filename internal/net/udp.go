@@ -280,9 +280,10 @@ func (s *UDPServer) handleDatagram(socket *udpSharedSocket, remote *net.UDPAddr,
 }
 
 type UDPClient struct {
-	Addr      string
-	LocalAddr string
-	Timeout   time.Duration
+	Addr        string
+	LocalAddr   string
+	Timeout     time.Duration
+	ChunkWindow int
 }
 
 type UDPBurstPhase struct {
@@ -303,6 +304,15 @@ func (c *UDPClient) WithLocalAddr(localAddr string) *UDPClient {
 	}
 	clone := *c
 	clone.LocalAddr = localAddr
+	return &clone
+}
+
+func (c *UDPClient) WithChunkWindow(window int) *UDPClient {
+	if c == nil {
+		return nil
+	}
+	clone := *c
+	clone.ChunkWindow = window
 	return &clone
 }
 
@@ -741,6 +751,7 @@ func (c *UDPClient) fetchPieceWithSharedSocket(remote *net.UDPAddr, requestID st
 func (c *UDPClient) collectPieceChunksWithConn(conn *net.UDPConn, remote *net.UDPAddr, requestID string, contentID string, pieceIndex int, buffer []byte) ([]byte, error) {
 	chunks := make(map[int][]byte)
 	totalChunks := -1
+	window := c.chunkWindow()
 	for round := 0; round < 6; round++ {
 		deadline := time.Now().Add(c.Timeout)
 		for {
@@ -784,7 +795,7 @@ func (c *UDPClient) collectPieceChunksWithConn(conn *net.UDPConn, remote *net.UD
 			}
 			continue
 		}
-		nextBatch := nextUDPPieceChunkBatch(chunks, totalChunks, udpPieceChunkWindow)
+		nextBatch := nextUDPPieceChunkBatch(chunks, totalChunks, window)
 		if len(nextBatch) == 0 {
 			return joinUDPChunks(chunks, totalChunks), nil
 		}
@@ -802,6 +813,7 @@ func (c *UDPClient) collectPieceChunksWithConn(conn *net.UDPConn, remote *net.UD
 func (c *UDPClient) collectPieceChunksWithSharedSocket(conn *net.UDPConn, remote *net.UDPAddr, msgCh <-chan UDPMessage, requestID string, contentID string, pieceIndex int) ([]byte, error) {
 	chunks := make(map[int][]byte)
 	totalChunks := -1
+	window := c.chunkWindow()
 	for round := 0; round < 6; round++ {
 		deadline := time.NewTimer(c.Timeout)
 		timedOut := false
@@ -835,7 +847,7 @@ func (c *UDPClient) collectPieceChunksWithSharedSocket(conn *net.UDPConn, remote
 			}
 			continue
 		}
-		nextBatch := nextUDPPieceChunkBatch(chunks, totalChunks, udpPieceChunkWindow)
+		nextBatch := nextUDPPieceChunkBatch(chunks, totalChunks, window)
 		if len(nextBatch) == 0 {
 			return joinUDPChunks(chunks, totalChunks), nil
 		}
@@ -906,6 +918,13 @@ func nextUDPPieceChunkBatch(chunks map[int][]byte, totalChunks int, window int) 
 		return missing
 	}
 	return append([]int(nil), missing[:window]...)
+}
+
+func (c *UDPClient) chunkWindow() int {
+	if c != nil && c.ChunkWindow > 0 {
+		return c.ChunkWindow
+	}
+	return udpPieceChunkWindow
 }
 
 func udpRequestedChunkIndexes(req UDPPieceRequest, totalChunks int) []int {
