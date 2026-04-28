@@ -954,7 +954,7 @@ const webAppHTML = `<!doctype html>
           '<strong>' + escapeHTML(peer.peerId || "peer") + '</strong> ' + formatProbeResultChip(result) + ' ' + formatRouteChip(route) + ' ' + formatRouteDriftChip(route, transfer) + ' ' + formatFallbackChip(fallback) + ' ' + formatBurstProfileChip(burstProfile) + ' ' + formatUDPDecisionChip(decision) + ' ' + formatUDPDecisionRiskChip(decisionRisk) + '<br>' +
           'actual ' + formatActualPathChip(transfer) + pathTotalsSuffix(transfer) +
           'udp ' + escapeHTML((peer.udpAddrs || []).join(",") || "-") +
-          '<br>observed ' + escapeHTML(peer.observedUdpAddr || "-") +
+          '<br>observed ' + escapeHTML(peer.observedUdpAddr || "-") + ' <span class="meta-inline">source ' + escapeHTML(peer.observedUdpSource || "tracker") + '</span>' +
           '<br>have ' + escapeHTML(formatHaveRanges(peer.haveRanges || [])) +
         '</div>';
       }).join("");

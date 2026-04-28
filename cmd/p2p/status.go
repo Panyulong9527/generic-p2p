@@ -114,6 +114,15 @@ func printPrettyStatus(status core.StoreStatus) {
 			)
 		}
 	}
+	if status.UDPObservation.ObservedUDPAddr != "" {
+		fmt.Printf(
+			"udpObservation observed=%s source=%s server=%s at=%s\n",
+			status.UDPObservation.ObservedUDPAddr,
+			emptyDashStatus(status.UDPObservation.Source),
+			emptyDashStatus(status.UDPObservation.Server),
+			emptyDashStatus(status.UDPObservation.ObservedAt),
+		)
+	}
 	if len(status.RecentDecisions) > 0 {
 		fmt.Println("recentDecisions")
 		for _, decision := range status.RecentDecisions {

@@ -29,6 +29,7 @@ type StoreStatus struct {
 	DownloadRate     int64                   `json:"downloadRate"`
 	UploadRate       int64                   `json:"uploadRate"`
 	Peers            int                     `json:"peers"`
+	UDPObservation   UDPObservationStatus    `json:"udpObservation,omitempty"`
 	PathStats        PathStats               `json:"pathStats"`
 	PeerStats        map[string]PeerStats    `json:"peerStats,omitempty"`
 	ActiveDownloads  []ActiveDownload        `json:"activeDownloads,omitempty"`
@@ -160,6 +161,7 @@ func (s *PieceStore) Status() StoreStatus {
 		DownloadRate:     runtimeSnapshot(s.runtime).DownloadRate,
 		UploadRate:       runtimeSnapshot(s.runtime).UploadRate,
 		Peers:            runtimeSnapshot(s.runtime).Peers,
+		UDPObservation:   runtimeSnapshot(s.runtime).UDPObservation,
 		PathStats:        mergePathStats(runtimeSnapshot(s.runtime).PathStats, downloadBytes),
 		PeerStats:        runtimeSnapshot(s.runtime).PeerStats,
 		ActiveDownloads:  runtimeSnapshot(s.runtime).ActiveDownloads,

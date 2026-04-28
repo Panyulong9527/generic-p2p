@@ -144,7 +144,7 @@ func runGet(logger *logging.Logger, args []string) error {
 
 		if *trackerURL != "" {
 			go func() {
-				startTrackerSyncLoop(logger, *trackerURL, *listen, *udpListen, *stunServer, manifest.ContentID, time.Second, store.CompletedRanges)
+				startTrackerSyncLoop(logger, *trackerURL, *listen, *udpListen, *stunServer, store.RuntimeStats(), manifest.ContentID, time.Second, store.CompletedRanges)
 			}()
 			logger.Info("tracker_sync_ready", "contentId", manifest.ContentID, "tracker", *trackerURL, "peer", *listen)
 		}
@@ -334,7 +334,7 @@ func runServe(logger *logging.Logger, args []string) error {
 
 	if *trackerURL != "" {
 		go func() {
-			startTrackerSyncLoop(logger, *trackerURL, *listen, *udpListen, *stunServer, manifest.ContentID, time.Second, func() []core.HaveRange {
+			startTrackerSyncLoop(logger, *trackerURL, *listen, *udpListen, *stunServer, nil, manifest.ContentID, time.Second, func() []core.HaveRange {
 				if len(manifest.Pieces) == 0 {
 					return nil
 				}

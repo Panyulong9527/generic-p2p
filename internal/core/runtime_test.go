@@ -182,6 +182,33 @@ func TestRuntimeStatsPersistsUDPBurstProfiles(t *testing.T) {
 	}
 }
 
+func TestRuntimeStatsPersistsUDPObservation(t *testing.T) {
+	dir := t.TempDir()
+
+	stats, err := OpenRuntimeStats(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := UDPObservationStatus{
+		ObservedUDPAddr: "198.51.100.10:40123",
+		Source:          "stun",
+		Server:          "stun.example.com:3478",
+		ObservedAt:      time.Unix(1700000300, 0).Format(time.RFC3339),
+	}
+	if err := stats.SetUDPObservation(observation); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := OpenRuntimeStats(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := reopened.Snapshot()
+	if snapshot.UDPObservation.ObservedUDPAddr != observation.ObservedUDPAddr || snapshot.UDPObservation.Source != "stun" || snapshot.UDPObservation.Server != observation.Server {
+		t.Fatalf("unexpected udp observation: %+v", snapshot.UDPObservation)
+	}
+}
+
 func TestRuntimeStatsRateFallsToZeroAfterWindow(t *testing.T) {
 	dir := t.TempDir()
 

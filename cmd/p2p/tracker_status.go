@@ -289,12 +289,13 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 			fallbackState := trackerPeerFallbackState(peer, advice, actual, udpKeepaliveResults)
 			decision := udpDecisions[peer.PeerID]
 			fmt.Printf(
-				"    %s addrs=%s observed=%s udp=%s observedUdp=%s route=%s actual=%s routeDrift=%s udpFallback=%s burst=%s decision=%s have=%s lastSeen=%s\n",
+				"    %s addrs=%s observed=%s udp=%s observedUdp=%s(%s) route=%s actual=%s routeDrift=%s udpFallback=%s burst=%s decision=%s have=%s lastSeen=%s\n",
 				peer.PeerID,
 				strings.Join(peer.Addrs, ","),
 				peer.ObservedAddr,
 				strings.Join(peer.UDPAddrs, ","),
 				peer.ObservedUDPAddr,
+				emptyDash(peer.ObservedUDPSource),
 				advice,
 				emptyDash(actual.LastPath),
 				trackerRouteDrift(advice, actual.LastPath),

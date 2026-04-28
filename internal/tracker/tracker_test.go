@@ -96,7 +96,7 @@ func TestTrackerPrefersObservedUDPAddrHint(t *testing.T) {
 	client := NewClient(httpServer.URL)
 	ctx := context.Background()
 
-	if err := client.RegisterPeerWithUDPObserved(ctx, "peer-a", []string{"127.0.0.1:9001"}, []string{"127.0.0.1:9003"}, "198.51.100.10:40123"); err != nil {
+	if err := client.RegisterPeerWithUDPObserved(ctx, "peer-a", []string{"127.0.0.1:9001"}, []string{"127.0.0.1:9003"}, "198.51.100.10:40123", "stun"); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.JoinSwarm(ctx, "peer-a", "sha256-demo", []core.HaveRange{{Start: 0, End: 1}}); err != nil {
@@ -112,6 +112,9 @@ func TestTrackerPrefersObservedUDPAddrHint(t *testing.T) {
 	}
 	if peers[0].ObservedUDPAddr != "198.51.100.10:40123" {
 		t.Fatalf("expected observed udp addr hint to win, got %s", peers[0].ObservedUDPAddr)
+	}
+	if peers[0].ObservedUDPSource != "stun" {
+		t.Fatalf("expected observed udp source stun, got %s", peers[0].ObservedUDPSource)
 	}
 }
 

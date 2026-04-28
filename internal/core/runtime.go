@@ -22,6 +22,7 @@ type RuntimeData struct {
 	DownloadRate     int64                   `json:"downloadRate"`
 	UploadRate       int64                   `json:"uploadRate"`
 	Peers            int                     `json:"peers"`
+	UDPObservation   UDPObservationStatus    `json:"udpObservation,omitempty"`
 	PathStats        PathStats               `json:"pathStats"`
 	PeerStats        map[string]PeerStats    `json:"peerStats,omitempty"`
 	ActiveDownloads  []ActiveDownload        `json:"activeDownloads,omitempty"`
@@ -70,6 +71,13 @@ type UDPBurstProfileStatus struct {
 	FailureCount  int    `json:"failureCount"`
 }
 
+type UDPObservationStatus struct {
+	ObservedUDPAddr string `json:"observedUdpAddr,omitempty"`
+	Source          string `json:"source,omitempty"`
+	Server          string `json:"server,omitempty"`
+	ObservedAt      string `json:"observedAt,omitempty"`
+}
+
 type transferSample struct {
 	AtUnixMilli int64 `json:"atUnixMilli"`
 	Bytes       int64 `json:"bytes"`
@@ -109,6 +117,14 @@ func (r *RuntimeStats) SetPeers(peers int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.data.Peers = peers
+	return r.saveLocked()
+}
+
+func (r *RuntimeStats) SetUDPObservation(observation UDPObservationStatus) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.data.UDPObservation = observation
 	return r.saveLocked()
 }
 

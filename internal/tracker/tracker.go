@@ -16,20 +16,22 @@ import (
 )
 
 type PeerRecord struct {
-	PeerID          string           `json:"peerId"`
-	Addrs           []string         `json:"addrs"`
-	UDPAddrs        []string         `json:"udpAddrs,omitempty"`
-	ObservedAddr    string           `json:"observedAddr,omitempty"`
-	ObservedUDPAddr string           `json:"observedUdpAddr,omitempty"`
-	HaveRanges      []core.HaveRange `json:"haveRanges"`
-	LastSeenAt      int64            `json:"lastSeenAt"`
+	PeerID            string           `json:"peerId"`
+	Addrs             []string         `json:"addrs"`
+	UDPAddrs          []string         `json:"udpAddrs,omitempty"`
+	ObservedAddr      string           `json:"observedAddr,omitempty"`
+	ObservedUDPAddr   string           `json:"observedUdpAddr,omitempty"`
+	ObservedUDPSource string           `json:"observedUdpSource,omitempty"`
+	HaveRanges        []core.HaveRange `json:"haveRanges"`
+	LastSeenAt        int64            `json:"lastSeenAt"`
 }
 
 type RegisterRequest struct {
-	PeerID              string   `json:"peerId"`
-	Addrs               []string `json:"addrs"`
-	UDPAddrs            []string `json:"udpAddrs,omitempty"`
-	ObservedUDPAddrHint string   `json:"observedUdpAddrHint,omitempty"`
+	PeerID                string   `json:"peerId"`
+	Addrs                 []string `json:"addrs"`
+	UDPAddrs              []string `json:"udpAddrs,omitempty"`
+	ObservedUDPAddrHint   string   `json:"observedUdpAddrHint,omitempty"`
+	ObservedUDPAddrSource string   `json:"observedUdpAddrSource,omitempty"`
 }
 
 type JoinSwarmRequest struct {
@@ -372,8 +374,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	record.UDPAddrs = req.UDPAddrs
 	record.ObservedAddr = observedAddr(r, firstAddr(req.Addrs))
 	record.ObservedUDPAddr = observedAddr(r, firstAddr(req.UDPAddrs))
+	record.ObservedUDPSource = "tracker"
 	if strings.TrimSpace(req.ObservedUDPAddrHint) != "" {
 		record.ObservedUDPAddr = strings.TrimSpace(req.ObservedUDPAddrHint)
+		if strings.TrimSpace(req.ObservedUDPAddrSource) != "" {
+			record.ObservedUDPSource = strings.TrimSpace(req.ObservedUDPAddrSource)
+		}
 	}
 	record.LastSeenAt = time.Now().Unix()
 	s.peers[req.PeerID] = record
@@ -1026,15 +1032,16 @@ func (c *Client) RegisterPeer(ctx context.Context, peerID string, addrs []string
 }
 
 func (c *Client) RegisterPeerWithUDP(ctx context.Context, peerID string, addrs []string, udpAddrs []string) error {
-	return c.RegisterPeerWithUDPObserved(ctx, peerID, addrs, udpAddrs, "")
+	return c.RegisterPeerWithUDPObserved(ctx, peerID, addrs, udpAddrs, "", "")
 }
 
-func (c *Client) RegisterPeerWithUDPObserved(ctx context.Context, peerID string, addrs []string, udpAddrs []string, observedUDPAddr string) error {
+func (c *Client) RegisterPeerWithUDPObserved(ctx context.Context, peerID string, addrs []string, udpAddrs []string, observedUDPAddr string, observedUDPSource string) error {
 	reqBody := RegisterRequest{
-		PeerID:              peerID,
-		Addrs:               addrs,
-		UDPAddrs:            udpAddrs,
-		ObservedUDPAddrHint: strings.TrimSpace(observedUDPAddr),
+		PeerID:                peerID,
+		Addrs:                 addrs,
+		UDPAddrs:              udpAddrs,
+		ObservedUDPAddrHint:   strings.TrimSpace(observedUDPAddr),
+		ObservedUDPAddrSource: strings.TrimSpace(observedUDPSource),
 	}
 	return c.postJSON(ctx, "/v1/peers/register", reqBody, nil)
 }
