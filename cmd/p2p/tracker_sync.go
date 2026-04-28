@@ -81,19 +81,20 @@ func startTrackerSyncLoop(logger *logging.Logger, trackerURL string, peerID stri
 
 func syncTrackerPeer(logger *logging.Logger, trackerURL string, peerID string, udpAddr string, stunServer string, stunCache *stunObservedAddrCache, runtime *core.RuntimeStats, contentID string, haveRanges []core.HaveRange) error {
 	client := tracker.NewClient(trackerURL)
+	now := time.Now()
 	udpAddrs := []string(nil)
 	observedUDPAddr := ""
 	if udpAddr != "" {
 		udpAddrs = []string{udpAddr}
 		if stunCache != nil {
-			observedUDPAddr = stunCache.Resolve(logger, stunServer, udpAddr, time.Now())
+			observedUDPAddr = stunCache.Resolve(logger, stunServer, udpAddr, now)
 		}
 		if runtime != nil && strings.TrimSpace(observedUDPAddr) != "" {
 			_ = runtime.SetUDPObservation(core.UDPObservationStatus{
 				ObservedUDPAddr: observedUDPAddr,
 				Source:          "stun",
 				Server:          strings.TrimSpace(stunServer),
-				ObservedAt:      time.Now().Format(time.RFC3339),
+				ObservedAt:      now.Format(time.RFC3339),
 			})
 		}
 	}
@@ -106,6 +107,10 @@ func syncTrackerPeer(logger *logging.Logger, trackerURL string, peerID string, u
 	if udpAddr != "" {
 		if err := pollTrackerUDPProbeRequests(logger, client, peerID, udpAddr); err != nil {
 			return fmt.Errorf("poll udp probes: %w", err)
+		}
+		maintainTrackerUDPSessions(logger, client, peerID, udpAddr, contentID, now)
+		if err := reportTrackerUDPSessions(client, contentID, now); err != nil {
+			return fmt.Errorf("report udp sessions: %w", err)
 		}
 	}
 	return nil
@@ -127,8 +132,10 @@ func pollTrackerUDPProbeRequests(logger *logging.Logger, client *tracker.Client,
 		succeeded := false
 		var lastErr error
 		for _, targetAddr := range targets {
+			noteUDPSessionAddr(request.RequesterPeerID, targetAddr, "tracker_probe_request", request.ContentID, time.Now())
 			if err := p2pnet.NewUDPClient(targetAddr, 2*time.Second).WithLocalAddr(udpAddr).ProbeMultiBurstForPeer(request.ContentID, peerID, phases); err != nil {
 				lastErr = err
+				noteUDPSessionStageFailure(request.RequesterPeerID, targetAddr, "probe", trackerProbeErrorKind(err), time.Now())
 				logger.Error("tracker_udp_probe_response_failed",
 					"contentId", request.ContentID,
 					"requesterPeerId", request.RequesterPeerID,
@@ -139,6 +146,7 @@ func pollTrackerUDPProbeRequests(logger *logging.Logger, client *tracker.Client,
 				continue
 			}
 			succeeded = true
+			noteUDPSessionStageSuccess(request.RequesterPeerID, targetAddr, "probe", request.ContentID, time.Now())
 			logger.Info("tracker_udp_probe_response_sent",
 				"contentId", request.ContentID,
 				"requesterPeerId", request.RequesterPeerID,
@@ -167,6 +175,68 @@ func pollTrackerUDPProbeRequests(logger *logging.Logger, client *tracker.Client,
 				"targetPeerId", peerID,
 				"error", reportErr.Error(),
 			)
+		}
+	}
+	return nil
+}
+
+func maintainTrackerUDPSessions(logger *logging.Logger, client *tracker.Client, selfPeerID string, selfUDPListenAddr string, contentID string, now time.Time) {
+	if strings.TrimSpace(selfUDPListenAddr) == "" {
+		return
+	}
+	for _, session := range currentUDPSessionSnapshots(contentID, now) {
+		if session.PeerID == "" || session.PeerID == selfPeerID {
+			continue
+		}
+		remoteAddr := strings.TrimSpace(session.PrimaryAddr)
+		if remoteAddr == "" || !udpSessionShouldSendKeepalive(session.PeerID, remoteAddr, now) {
+			continue
+		}
+		go func(peerID string, remote string) {
+			if err := p2pnet.NewUDPClient(remote, 1200*time.Millisecond).WithLocalAddr(selfUDPListenAddr).ProbeForPeer(contentID, peerID); err != nil {
+				noteUDPSessionStageFailure(peerID, remote, "keepalive", trackerProbeErrorKind(err), time.Now())
+				_ = client.ReportUDPKeepaliveResult(context.Background(), peerID, contentID, false, trackerProbeErrorKind(err))
+				logger.Info("tracker_sync_udp_session_keepalive_failed",
+					"contentId", contentID,
+					"peerId", peerID,
+					"remote", remote,
+					"error", err.Error(),
+				)
+				return
+			}
+			noteUDPSessionStageSuccess(peerID, remote, "keepalive", contentID, time.Now())
+			_ = client.ReportUDPKeepaliveResult(context.Background(), peerID, contentID, true, "")
+			logger.Info("tracker_sync_udp_session_keepalive_sent",
+				"contentId", contentID,
+				"peerId", peerID,
+				"remote", remote,
+			)
+		}(session.PeerID, remoteAddr)
+	}
+}
+
+func reportTrackerUDPSessions(client *tracker.Client, contentID string, now time.Time) error {
+	for _, session := range currentUDPSessionSnapshots(contentID, now) {
+		if strings.TrimSpace(session.PeerID) == "" || strings.TrimSpace(session.PrimaryAddr) == "" {
+			continue
+		}
+		if err := client.ReportUDPSessionHealth(
+			context.Background(),
+			session.PeerID,
+			contentID,
+			session.State,
+			session.HealthScore,
+			session.LastStage,
+			session.LastErrorKind,
+			session.RecommendedChunkWindow,
+			session.RecommendedRoundTimeout.Milliseconds(),
+			session.RecommendedAttemptBudget,
+			int(session.KeepaliveInterval/time.Second),
+			session.LastActiveAt.Unix(),
+			session.LastSuccessAt.Unix(),
+			session.LastFailureAt.Unix(),
+		); err != nil {
+			return err
 		}
 	}
 	return nil

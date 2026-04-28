@@ -506,6 +506,51 @@ func TestBuildTrackerUDPPeerBiasesIncludesUDPDecisionRiskBias(t *testing.T) {
 	}
 }
 
+func TestBuildTrackerUDPPeerBiasesIncludesUDPSessionHealthBias(t *testing.T) {
+	now := time.Unix(780, 0)
+	status := tracker.StatusResponse{
+		UDPSessionHealths: []tracker.UDPSessionHealthStatus{
+			{
+				TargetPeerID:              "peer-active",
+				ContentID:                 "sha256-demo",
+				State:                     "active",
+				HealthScore:               0.62,
+				LastStage:                 "piece",
+				RecommendedChunkWindow:    6,
+				RecommendedRoundTimeoutMs: 820,
+				RecommendedAttemptBudget:  5,
+				LastReportedAt:            now.Add(-5 * time.Second).Unix(),
+			},
+			{
+				TargetPeerID:   "peer-cooling",
+				ContentID:      "sha256-demo",
+				State:          "cooling",
+				HealthScore:    -0.30,
+				LastStage:      "probe",
+				LastErrorKind:  "udp_timeout",
+				LastReportedAt: now.Add(-4 * time.Second).Unix(),
+			},
+		},
+		Swarms: []tracker.SwarmStatus{
+			{
+				ContentID: "sha256-demo",
+				Peers: []tracker.PeerRecord{
+					{PeerID: "peer-active", UDPAddrs: []string{"198.51.100.20:9003"}},
+					{PeerID: "peer-cooling", UDPAddrs: []string{"198.51.100.21:9003"}},
+				},
+			},
+		},
+	}
+
+	biases := buildTrackerUDPPeerBiases(status, "sha256-demo", now)
+	if got := biases["peer-active"]; math.Abs(got-0.18) > 1e-9 {
+		t.Fatalf("expected active session bias 0.18, got %.2f", got)
+	}
+	if got := biases["peer-cooling"]; math.Abs(got-(-0.14)) > 1e-9 {
+		t.Fatalf("expected cooling session bias -0.14, got %.2f", got)
+	}
+}
+
 func TestRequesterSideBurstPunchTargetsPrefersSTUNObservedAndDeduplicates(t *testing.T) {
 	peer := tracker.PeerRecord{
 		PeerID:            "peer-a",

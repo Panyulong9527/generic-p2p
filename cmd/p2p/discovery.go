@@ -412,6 +412,19 @@ func trackerPeerUDPDecision(status tracker.StatusResponse, contentID string, pee
 	return tracker.UDPDecisionStatus{}
 }
 
+func trackerPeerUDPSessionHealth(status tracker.StatusResponse, contentID string, peer tracker.PeerRecord) tracker.UDPSessionHealthStatus {
+	for _, item := range status.UDPSessionHealths {
+		if item.TargetPeerID != peer.PeerID {
+			continue
+		}
+		if strings.TrimSpace(item.ContentID) != "" && item.ContentID != contentID {
+			continue
+		}
+		return item
+	}
+	return tracker.UDPSessionHealthStatus{}
+}
+
 func udpBurstProfileName(phases []p2pnet.UDPBurstPhase) string {
 	switch {
 	case reflectBurstPhasesEqual(phases, warmUDPBurstPhases()):
@@ -1122,6 +1135,13 @@ func buildTrackerUDPPeerBiases(status tracker.StatusResponse, contentID string, 
 		}
 		udpDecisions[item.TargetPeerID] = item
 	}
+	udpSessionHealth := make(map[string]tracker.UDPSessionHealthStatus, len(status.UDPSessionHealths))
+	for _, item := range status.UDPSessionHealths {
+		if strings.TrimSpace(item.ContentID) != "" && item.ContentID != contentID {
+			continue
+		}
+		udpSessionHealth[item.TargetPeerID] = item
+	}
 	for _, swarm := range status.Swarms {
 		if swarm.ContentID != contentID {
 			continue
@@ -1134,10 +1154,46 @@ func buildTrackerUDPPeerBiases(status tracker.StatusResponse, contentID string, 
 			_, _, _, burstProfile := trackerPeerUDPState(status, contentID, peer)
 			burstBias := trackerBurstProfileBias(burstProfile, now)
 			decisionBias := trackerUDPDecisionBias(peer, probeResults[peer.PeerID], transferPaths[peer.PeerID], udpDecisions[peer.PeerID], now)
-			biases[peer.PeerID] += transferBias + keepaliveBias + fallbackBias + burstBias + decisionBias
+			sessionBias := trackerUDPSessionHealthBias(udpSessionHealth[peer.PeerID], now)
+			biases[peer.PeerID] += transferBias + keepaliveBias + fallbackBias + burstBias + decisionBias + sessionBias
 		}
 	}
 	return biases
+}
+
+func trackerUDPSessionHealthBias(item tracker.UDPSessionHealthStatus, now time.Time) float64 {
+	if strings.TrimSpace(item.TargetPeerID) == "" || item.LastReportedAt == 0 {
+		return 0
+	}
+	if now.Sub(time.Unix(item.LastReportedAt, 0)) > time.Minute {
+		return 0
+	}
+	switch strings.TrimSpace(item.State) {
+	case "active":
+		switch {
+		case item.HealthScore >= 0.45:
+			return 0.18
+		case item.HealthScore >= 0.15:
+			return 0.10
+		default:
+			return 0.05
+		}
+	case "warm":
+		if item.HealthScore >= 0.10 {
+			return 0.06
+		}
+		return 0.03
+	case "cooling":
+		if strings.TrimSpace(item.LastStage) == "piece" {
+			return -0.08
+		}
+		return -0.14
+	default:
+		if item.HealthScore <= -0.20 {
+			return -0.06
+		}
+	}
+	return 0
 }
 
 func trackerUDPDecisionBias(peer tracker.PeerRecord, probeResult tracker.UDPProbeResultStatus, transferPath tracker.PeerTransferPathStatus, decision tracker.UDPDecisionStatus, now time.Time) float64 {

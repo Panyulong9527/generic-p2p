@@ -111,6 +111,22 @@ type ReportUDPDecisionRequest struct {
 	Reason        string  `json:"reason,omitempty"`
 }
 
+type ReportUDPSessionHealthRequest struct {
+	TargetPeerID              string  `json:"targetPeerId"`
+	ContentID                 string  `json:"contentId"`
+	State                     string  `json:"state,omitempty"`
+	HealthScore               float64 `json:"healthScore"`
+	LastStage                 string  `json:"lastStage,omitempty"`
+	LastErrorKind             string  `json:"lastErrorKind,omitempty"`
+	RecommendedChunkWindow    int     `json:"recommendedChunkWindow"`
+	RecommendedRoundTimeoutMs int64   `json:"recommendedRoundTimeoutMs"`
+	RecommendedAttemptBudget  int     `json:"recommendedAttemptBudget"`
+	KeepaliveIntervalSeconds  int     `json:"keepaliveIntervalSeconds"`
+	LastActiveAt              int64   `json:"lastActiveAt,omitempty"`
+	LastSuccessAt             int64   `json:"lastSuccessAt,omitempty"`
+	LastFailureAt             int64   `json:"lastFailureAt,omitempty"`
+}
+
 type SwarmStatus struct {
 	ContentID string       `json:"contentId"`
 	PeerCount int          `json:"peerCount"`
@@ -176,6 +192,24 @@ type UDPDecisionStatus struct {
 	ReportCount    int     `json:"reportCount"`
 }
 
+type UDPSessionHealthStatus struct {
+	TargetPeerID              string  `json:"targetPeerId"`
+	ContentID                 string  `json:"contentId,omitempty"`
+	State                     string  `json:"state,omitempty"`
+	HealthScore               float64 `json:"healthScore"`
+	LastStage                 string  `json:"lastStage,omitempty"`
+	LastErrorKind             string  `json:"lastErrorKind,omitempty"`
+	RecommendedChunkWindow    int     `json:"recommendedChunkWindow"`
+	RecommendedRoundTimeoutMs int64   `json:"recommendedRoundTimeoutMs"`
+	RecommendedAttemptBudget  int     `json:"recommendedAttemptBudget"`
+	KeepaliveIntervalSeconds  int     `json:"keepaliveIntervalSeconds"`
+	LastActiveAt              int64   `json:"lastActiveAt,omitempty"`
+	LastSuccessAt             int64   `json:"lastSuccessAt,omitempty"`
+	LastFailureAt             int64   `json:"lastFailureAt,omitempty"`
+	LastReportedAt            int64   `json:"lastReportedAt,omitempty"`
+	ReportCount               int     `json:"reportCount"`
+}
+
 type StatusResponse struct {
 	GeneratedAt                 string                   `json:"generatedAt"`
 	PeerCount                   int                      `json:"peerCount"`
@@ -194,6 +228,7 @@ type StatusResponse struct {
 	UDPKeepaliveResults         []UDPKeepaliveStatus     `json:"udpKeepaliveResults,omitempty"`
 	UDPBurstProfiles            []UDPBurstProfileStatus  `json:"udpBurstProfiles,omitempty"`
 	UDPDecisions                []UDPDecisionStatus      `json:"udpDecisions,omitempty"`
+	UDPSessionHealths           []UDPSessionHealthStatus `json:"udpSessionHealths,omitempty"`
 	Swarms                      []SwarmStatus            `json:"swarms"`
 }
 
@@ -246,6 +281,23 @@ type udpDecisionSummary struct {
 	ReportCount    int
 }
 
+type udpSessionHealthSummary struct {
+	ContentID                 string
+	State                     string
+	HealthScore               float64
+	LastStage                 string
+	LastErrorKind             string
+	RecommendedChunkWindow    int
+	RecommendedRoundTimeoutMs int64
+	RecommendedAttemptBudget  int
+	KeepaliveIntervalSeconds  int
+	LastActiveAt              int64
+	LastSuccessAt             int64
+	LastFailureAt             int64
+	LastReportedAt            int64
+	ReportCount               int
+}
+
 type Server struct {
 	mu               sync.Mutex
 	peers            map[string]PeerRecord
@@ -256,6 +308,7 @@ type Server struct {
 	udpKeepalives    map[string]udpKeepaliveSummary
 	udpBurstProfiles map[string]udpBurstProfileSummary
 	udpDecisions     map[string]udpDecisionSummary
+	udpSessionHealth map[string]udpSessionHealthSummary
 	peerTTL          time.Duration
 	cleanupInterval  time.Duration
 	statePath        string
@@ -275,6 +328,7 @@ func NewServer() *Server {
 		udpKeepalives:    make(map[string]udpKeepaliveSummary),
 		udpBurstProfiles: make(map[string]udpBurstProfileSummary),
 		udpDecisions:     make(map[string]udpDecisionSummary),
+		udpSessionHealth: make(map[string]udpSessionHealthSummary),
 		peerTTL:          10 * time.Second,
 		cleanupInterval:  2 * time.Second,
 		webDataDir:       defaultWebDataDir,
@@ -306,6 +360,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/udp/keepalives/report", s.handleReportUDPKeepaliveResult)
 	mux.HandleFunc("/v1/udp/burst-profiles/report", s.handleReportUDPBurstProfile)
 	mux.HandleFunc("/v1/udp/decisions/report", s.handleReportUDPDecision)
+	mux.HandleFunc("/v1/udp/sessions/report", s.handleReportUDPSessionHealth)
 	mux.HandleFunc("/v1/transfers/report", s.handleReportTransferPath)
 	mux.HandleFunc("/v1/swarms/join", s.handleJoin)
 	mux.HandleFunc("/v1/swarms/", s.handleGetPeers)
@@ -718,6 +773,46 @@ func (s *Server) handleReportUDPDecision(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
+func (s *Server) handleReportUDPSessionHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req ReportUDPSessionHealthRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.TargetPeerID) == "" || strings.TrimSpace(req.ContentID) == "" {
+		http.Error(w, "targetPeerId and contentId are required", http.StatusBadRequest)
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneExpiredLocked(time.Now())
+
+	summary := s.udpSessionHealth[req.TargetPeerID]
+	summary.ContentID = req.ContentID
+	summary.State = req.State
+	summary.HealthScore = req.HealthScore
+	summary.LastStage = req.LastStage
+	summary.LastErrorKind = req.LastErrorKind
+	summary.RecommendedChunkWindow = req.RecommendedChunkWindow
+	summary.RecommendedRoundTimeoutMs = req.RecommendedRoundTimeoutMs
+	summary.RecommendedAttemptBudget = req.RecommendedAttemptBudget
+	summary.KeepaliveIntervalSeconds = req.KeepaliveIntervalSeconds
+	summary.LastActiveAt = req.LastActiveAt
+	summary.LastSuccessAt = req.LastSuccessAt
+	summary.LastFailureAt = req.LastFailureAt
+	summary.LastReportedAt = time.Now().Unix()
+	summary.ReportCount++
+	s.udpSessionHealth[req.TargetPeerID] = summary
+
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
 func (s *Server) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(s.cleanupInterval)
 	defer ticker.Stop()
@@ -764,6 +859,7 @@ func (s *Server) Status() StatusResponse {
 		UDPKeepaliveResults:    make([]UDPKeepaliveStatus, 0, len(s.udpKeepalives)),
 		UDPBurstProfiles:       make([]UDPBurstProfileStatus, 0, len(s.udpBurstProfiles)),
 		UDPDecisions:           make([]UDPDecisionStatus, 0, len(s.udpDecisions)),
+		UDPSessionHealths:      make([]UDPSessionHealthStatus, 0, len(s.udpSessionHealth)),
 		PeerTTLSeconds:         int(s.peerTTL / time.Second),
 		CleanupIntervalSeconds: int(s.cleanupInterval / time.Second),
 		StatePath:              s.statePath,
@@ -858,6 +954,25 @@ func (s *Server) Status() StatusResponse {
 			ReportCount:    summary.ReportCount,
 		})
 	}
+	for targetPeerID, summary := range s.udpSessionHealth {
+		response.UDPSessionHealths = append(response.UDPSessionHealths, UDPSessionHealthStatus{
+			TargetPeerID:              targetPeerID,
+			ContentID:                 summary.ContentID,
+			State:                     summary.State,
+			HealthScore:               summary.HealthScore,
+			LastStage:                 summary.LastStage,
+			LastErrorKind:             summary.LastErrorKind,
+			RecommendedChunkWindow:    summary.RecommendedChunkWindow,
+			RecommendedRoundTimeoutMs: summary.RecommendedRoundTimeoutMs,
+			RecommendedAttemptBudget:  summary.RecommendedAttemptBudget,
+			KeepaliveIntervalSeconds:  summary.KeepaliveIntervalSeconds,
+			LastActiveAt:              summary.LastActiveAt,
+			LastSuccessAt:             summary.LastSuccessAt,
+			LastFailureAt:             summary.LastFailureAt,
+			LastReportedAt:            summary.LastReportedAt,
+			ReportCount:               summary.ReportCount,
+		})
+	}
 
 	return response
 }
@@ -883,6 +998,7 @@ func (s *Server) pruneExpiredLocked(now time.Time) {
 		delete(s.udpKeepalives, peerID)
 		delete(s.udpBurstProfiles, peerID)
 		delete(s.udpDecisions, peerID)
+		delete(s.udpSessionHealth, peerID)
 		for contentID, peerSet := range s.swarms {
 			delete(peerSet, peerID)
 			if len(peerSet) == 0 {
@@ -1158,6 +1274,25 @@ func (c *Client) ReportUDPDecision(ctx context.Context, targetPeerID string, con
 		Reason:        reason,
 	}
 	return c.postJSON(ctx, "/v1/udp/decisions/report", reqBody, nil)
+}
+
+func (c *Client) ReportUDPSessionHealth(ctx context.Context, targetPeerID string, contentID string, state string, healthScore float64, lastStage string, lastErrorKind string, recommendedChunkWindow int, recommendedRoundTimeoutMs int64, recommendedAttemptBudget int, keepaliveIntervalSeconds int, lastActiveAt int64, lastSuccessAt int64, lastFailureAt int64) error {
+	reqBody := ReportUDPSessionHealthRequest{
+		TargetPeerID:              targetPeerID,
+		ContentID:                 contentID,
+		State:                     state,
+		HealthScore:               healthScore,
+		LastStage:                 lastStage,
+		LastErrorKind:             lastErrorKind,
+		RecommendedChunkWindow:    recommendedChunkWindow,
+		RecommendedRoundTimeoutMs: recommendedRoundTimeoutMs,
+		RecommendedAttemptBudget:  recommendedAttemptBudget,
+		KeepaliveIntervalSeconds:  keepaliveIntervalSeconds,
+		LastActiveAt:              lastActiveAt,
+		LastSuccessAt:             lastSuccessAt,
+		LastFailureAt:             lastFailureAt,
+	}
+	return c.postJSON(ctx, "/v1/udp/sessions/report", reqBody, nil)
 }
 
 func (c *Client) GetStatus(ctx context.Context) (StatusResponse, error) {

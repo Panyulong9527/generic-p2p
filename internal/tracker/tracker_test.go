@@ -304,6 +304,9 @@ func TestTrackerStatusIncludesSwarmDetails(t *testing.T) {
 	if err := client.ReportUDPDecision(ctx, "peer-a", "sha256-demo", "aggressive", "piece", 5, 5700, 1.42, "selected_udp_best_score"); err != nil {
 		t.Fatal(err)
 	}
+	if err := client.ReportUDPSessionHealth(ctx, "peer-a", "sha256-demo", "active", 0.62, "piece", "", 6, 820, 5, 6, nowUnix(time.Now()), nowUnix(time.Now()), 0); err != nil {
+		t.Fatal(err)
+	}
 	status, err = client.GetStatus(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -347,6 +350,56 @@ func TestTrackerStatusIncludesSwarmDetails(t *testing.T) {
 	if status.UDPDecisions[0].BurstProfile != "aggressive" || status.UDPDecisions[0].LastStage != "piece" || status.UDPDecisions[0].UDPBudget != 5 || status.UDPDecisions[0].UDPTimeoutMs != 5700 {
 		t.Fatalf("unexpected udp decision payload: %#v", status.UDPDecisions[0])
 	}
+	if len(status.UDPSessionHealths) != 1 || status.UDPSessionHealths[0].TargetPeerID != "peer-a" {
+		t.Fatalf("unexpected udp session healths: %#v", status.UDPSessionHealths)
+	}
+	if status.UDPSessionHealths[0].State != "active" || status.UDPSessionHealths[0].RecommendedChunkWindow != 6 || status.UDPSessionHealths[0].RecommendedAttemptBudget != 5 {
+		t.Fatalf("unexpected udp session health payload: %#v", status.UDPSessionHealths[0])
+	}
+}
+
+func TestTrackerStoresUDPSessionHealth(t *testing.T) {
+	server := NewServer()
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	client := NewClient(httpServer.URL)
+	ctx := context.Background()
+
+	if err := client.RegisterPeerWithUDP(ctx, "peer-a", []string{"127.0.0.1:9001"}, []string{"127.0.0.1:9003"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.JoinSwarm(ctx, "peer-a", "sha256-demo", []core.HaveRange{{Start: 0, End: 3}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ReportUDPSessionHealth(ctx, "peer-a", "sha256-demo", "cooling", -0.32, "probe", "udp_timeout", 3, 1350, 2, 15, 1700000001, 1700000000, 1700000002); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := client.GetStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status.UDPSessionHealths) != 1 {
+		t.Fatalf("expected one udp session health, got %#v", status.UDPSessionHealths)
+	}
+	item := status.UDPSessionHealths[0]
+	if item.TargetPeerID != "peer-a" || item.ContentID != "sha256-demo" {
+		t.Fatalf("unexpected udp session health identity: %#v", item)
+	}
+	if item.State != "cooling" || item.LastStage != "probe" || item.LastErrorKind != "udp_timeout" {
+		t.Fatalf("unexpected udp session health stage/error: %#v", item)
+	}
+	if item.RecommendedChunkWindow != 3 || item.RecommendedRoundTimeoutMs != 1350 || item.RecommendedAttemptBudget != 2 || item.KeepaliveIntervalSeconds != 15 {
+		t.Fatalf("unexpected udp session recommendations: %#v", item)
+	}
+	if item.ReportCount != 1 || item.LastReportedAt == 0 {
+		t.Fatalf("expected report bookkeeping, got %#v", item)
+	}
+}
+
+func nowUnix(value time.Time) int64 {
+	return value.Unix()
 }
 
 func TestTrackerStatusReflectsConfiguredTimings(t *testing.T) {

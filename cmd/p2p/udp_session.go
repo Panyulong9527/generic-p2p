@@ -267,6 +267,32 @@ func udpWarmSessionPeers(contentID string, now time.Time) []udpPeerSession {
 	return sessions
 }
 
+func currentUDPSessionSnapshots(contentID string, now time.Time) []udpPeerSession {
+	udpSessionState.mu.Lock()
+	defer udpSessionState.mu.Unlock()
+
+	sessions := make([]udpPeerSession, 0, len(udpSessionState.sessions))
+	for peerID, session := range udpSessionState.sessions {
+		session = pruneUDPSession(session, now)
+		if sessionExpired(session, contentID, now) {
+			delete(udpSessionState.sessions, peerID)
+			continue
+		}
+		if !sessionRelevantToContent(session, contentID, now) {
+			udpSessionState.sessions[peerID] = session
+			continue
+		}
+		sessions = append(sessions, cloneUDPSession(session))
+		udpSessionState.sessions[peerID] = session
+	}
+	sort.Slice(sessions, func(i, j int) bool {
+		left := maxSessionTime(sessions[i].LastSuccessAt, sessions[i].LastActiveAt)
+		right := maxSessionTime(sessions[j].LastSuccessAt, sessions[j].LastActiveAt)
+		return left.After(right)
+	})
+	return sessions
+}
+
 func udpSessionShouldSendKeepalive(peerID string, remoteAddr string, now time.Time) bool {
 	udpSessionState.mu.Lock()
 	defer udpSessionState.mu.Unlock()
@@ -420,6 +446,16 @@ func sessionShouldKeepAlive(session udpPeerSession, contentID string, now time.T
 		}
 	}
 	return false
+}
+
+func sessionRelevantToContent(session udpPeerSession, contentID string, now time.Time) bool {
+	if strings.TrimSpace(contentID) == "" {
+		return now.Sub(session.LastActiveAt) <= 2*time.Minute || now.Sub(session.LastSuccessAt) <= 2*time.Minute
+	}
+	if seenAt, ok := session.RecentContentIDs[strings.TrimSpace(contentID)]; ok && now.Sub(seenAt) <= 2*time.Minute {
+		return true
+	}
+	return now.Sub(session.LastSuccessAt) <= 45*time.Second
 }
 
 func udpSessionKeepaliveInterval(session udpPeerSession, now time.Time) time.Duration {
