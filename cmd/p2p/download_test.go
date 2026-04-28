@@ -397,3 +397,104 @@ func TestRecentUDPChunkProgressExpires(t *testing.T) {
 		t.Fatal("expected stale chunk progress sample to expire")
 	}
 }
+
+func TestUDPPieceChunkWindowAdjustsBySmoothedProgress(t *testing.T) {
+	now := time.Now()
+	const contentID = "sha256-download-window-ewma"
+
+	recordUDPChunkProgress(contentID, "udp://ewma-fast-peer", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  4,
+		Duration:        720 * time.Millisecond,
+		Completed:       true,
+	}, now.Add(-3*time.Second))
+	recordUDPChunkProgress(contentID, "udp://ewma-fast-peer", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 5,
+		ReceivedChunks:  5,
+		Duration:        760 * time.Millisecond,
+		Completed:       true,
+	}, now.Add(-1*time.Second))
+
+	recordUDPChunkProgress(contentID, "udp://ewma-weak-peer", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  1,
+		Duration:        1500 * time.Millisecond,
+	}, now.Add(-3*time.Second))
+	recordUDPChunkProgress(contentID, "udp://ewma-weak-peer", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  1,
+		Duration:        1450 * time.Millisecond,
+	}, now.Add(-1*time.Second))
+
+	if got := udpPieceChunkWindowForCandidate(contentID, scheduler.PeerCandidate{
+		Transport: "udp",
+		PeerID:    "udp://ewma-fast-peer",
+	}); got != 5 {
+		t.Fatalf("expected smoothed strong progress to widen default window to 5, got %d", got)
+	}
+
+	if got := udpPieceChunkWindowForCandidate(contentID, scheduler.PeerCandidate{
+		Transport: "udp",
+		PeerID:    "udp://ewma-weak-peer",
+	}); got != 3 {
+		t.Fatalf("expected smoothed weak progress to shrink default window to 3, got %d", got)
+	}
+}
+
+func TestUDPPieceChunkRoundTimeoutAdjustsBySmoothedProgress(t *testing.T) {
+	now := time.Now()
+	const contentID = "sha256-download-round-ewma"
+
+	recordUDPChunkProgress(contentID, "udp://ewma-fast-round-peer", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  4,
+		Duration:        680 * time.Millisecond,
+		Completed:       true,
+	}, now.Add(-3*time.Second))
+	recordUDPChunkProgress(contentID, "udp://ewma-fast-round-peer", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  4,
+		Duration:        740 * time.Millisecond,
+		Completed:       true,
+	}, now.Add(-1*time.Second))
+
+	recordUDPChunkProgress(contentID, "udp://ewma-slow-round-peer", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  1,
+		Duration:        1400 * time.Millisecond,
+	}, now.Add(-3*time.Second))
+	recordUDPChunkProgress(contentID, "udp://ewma-slow-round-peer", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  1,
+		Duration:        1500 * time.Millisecond,
+	}, now.Add(-1*time.Second))
+
+	if got := udpPieceChunkRoundTimeoutForCandidate(contentID, scheduler.PeerCandidate{
+		Transport: "udp",
+		PeerID:    "udp://ewma-fast-round-peer",
+	}); got != 850*time.Millisecond {
+		t.Fatalf("expected smoothed strong progress to tighten default round timeout to 850ms, got %s", got)
+	}
+
+	if got := udpPieceChunkRoundTimeoutForCandidate(contentID, scheduler.PeerCandidate{
+		Transport: "udp",
+		PeerID:    "udp://ewma-slow-round-peer",
+	}); got != 1250*time.Millisecond {
+		t.Fatalf("expected smoothed weak progress to widen default round timeout to 1250ms, got %s", got)
+	}
+}
+
+func TestSmoothedUDPChunkProgressExpires(t *testing.T) {
+	now := time.Now()
+	const contentID = "sha256-download-ewma-expire"
+	recordUDPChunkProgress(contentID, "udp://stale-ewma-peer", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  4,
+		Duration:        700 * time.Millisecond,
+		Completed:       true,
+	}, now.Add(-50*time.Second))
+
+	if _, ok := smoothedUDPChunkProgress(contentID, "udp://stale-ewma-peer", now); ok {
+		t.Fatal("expected stale smoothed chunk progress to expire")
+	}
+}

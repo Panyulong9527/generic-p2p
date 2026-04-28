@@ -29,11 +29,21 @@ type udpChunkProgressSample struct {
 	RecordedAt      time.Time
 }
 
+type udpChunkProgressEWMA struct {
+	ReceiveRatio float64
+	DurationMs   float64
+	CompleteRate float64
+	Samples      int
+	RecordedAt   time.Time
+}
+
 var udpChunkProgressState = struct {
 	mu      sync.Mutex
 	entries map[string]udpChunkProgressSample
+	ewma    map[string]udpChunkProgressEWMA
 }{
 	entries: make(map[string]udpChunkProgressSample),
+	ewma:    make(map[string]udpChunkProgressEWMA),
 }
 
 func downloadPieces(logger *logging.Logger, manifest *core.ContentManifest, store *core.PieceStore, discovery peerDiscoveryOptions, workers int) error {
@@ -384,6 +394,18 @@ func decisionRiskAdjustedUDPPieceChunkWindow(base int, risk string) int {
 }
 
 func progressAdjustedUDPPieceChunkWindow(base int, contentID string, peerID string, now time.Time) int {
+	if smoothed, ok := smoothedUDPChunkProgress(contentID, peerID, now); ok {
+		switch {
+		case smoothed.Samples >= 2 && smoothed.CompleteRate >= 0.7 && smoothed.ReceiveRatio >= 0.85 && smoothed.DurationMs <= 900:
+			if base < 8 {
+				return base + 1
+			}
+		case smoothed.Samples >= 2 && smoothed.ReceiveRatio < 0.45:
+			if base > 1 {
+				return base - 1
+			}
+		}
+	}
 	sample, ok := recentUDPChunkProgress(contentID, peerID, now)
 	if !ok {
 		return base
@@ -406,6 +428,16 @@ func progressAdjustedUDPPieceChunkWindow(base int, contentID string, peerID stri
 }
 
 func progressAdjustedUDPPieceChunkRoundTimeout(base time.Duration, contentID string, peerID string, now time.Time) time.Duration {
+	if smoothed, ok := smoothedUDPChunkProgress(contentID, peerID, now); ok {
+		switch {
+		case smoothed.Samples >= 2 && smoothed.CompleteRate >= 0.7 && smoothed.ReceiveRatio >= 0.85 && smoothed.DurationMs+150 < float64(base.Milliseconds()):
+			return base - 150*time.Millisecond
+		case smoothed.Samples >= 2 && smoothed.ReceiveRatio < 0.35:
+			return base + 250*time.Millisecond
+		case smoothed.Samples >= 2 && smoothed.ReceiveRatio < 0.55:
+			return base + 150*time.Millisecond
+		}
+	}
 	sample, ok := recentUDPChunkProgress(contentID, peerID, now)
 	if !ok {
 		return base
@@ -614,7 +646,8 @@ func recordUDPChunkProgress(contentID string, peerID string, stats p2pnet.UDPPie
 	}
 	udpChunkProgressState.mu.Lock()
 	defer udpChunkProgressState.mu.Unlock()
-	udpChunkProgressState.entries[contentID+"|"+peerID] = udpChunkProgressSample{
+	key := contentID + "|" + peerID
+	udpChunkProgressState.entries[key] = udpChunkProgressSample{
 		RequestedChunks: stats.RequestedChunks,
 		ReceivedChunks:  stats.ReceivedChunks,
 		TotalChunks:     stats.TotalChunks,
@@ -622,6 +655,7 @@ func recordUDPChunkProgress(contentID string, peerID string, stats p2pnet.UDPPie
 		Completed:       stats.Completed,
 		RecordedAt:      now,
 	}
+	recordUDPChunkProgressEWMA(key, stats, now)
 }
 
 func recentUDPChunkProgress(contentID string, peerID string, now time.Time) (udpChunkProgressSample, bool) {
@@ -640,6 +674,60 @@ func recentUDPChunkProgress(contentID string, peerID string, now time.Time) (udp
 		return udpChunkProgressSample{}, false
 	}
 	return sample, true
+}
+
+func smoothedUDPChunkProgress(contentID string, peerID string, now time.Time) (udpChunkProgressEWMA, bool) {
+	if strings.TrimSpace(contentID) == "" || strings.TrimSpace(peerID) == "" {
+		return udpChunkProgressEWMA{}, false
+	}
+	key := contentID + "|" + peerID
+	udpChunkProgressState.mu.Lock()
+	defer udpChunkProgressState.mu.Unlock()
+	smoothed, ok := udpChunkProgressState.ewma[key]
+	if !ok {
+		return udpChunkProgressEWMA{}, false
+	}
+	if now.Sub(smoothed.RecordedAt) > 45*time.Second {
+		delete(udpChunkProgressState.ewma, key)
+		return udpChunkProgressEWMA{}, false
+	}
+	return smoothed, true
+}
+
+func recordUDPChunkProgressEWMA(key string, stats p2pnet.UDPPieceRoundStats, now time.Time) {
+	if strings.TrimSpace(key) == "" || stats.RequestedChunks <= 0 {
+		return
+	}
+	receiveRatio := float64(stats.ReceivedChunks) / float64(stats.RequestedChunks)
+	if receiveRatio < 0 {
+		receiveRatio = 0
+	}
+	if receiveRatio > 1 {
+		receiveRatio = 1
+	}
+	completeRate := 0.0
+	if stats.Completed {
+		completeRate = 1
+	}
+	durationMs := float64(stats.Duration.Milliseconds())
+	const alpha = 0.45
+	current, ok := udpChunkProgressState.ewma[key]
+	if !ok {
+		udpChunkProgressState.ewma[key] = udpChunkProgressEWMA{
+			ReceiveRatio: receiveRatio,
+			DurationMs:   durationMs,
+			CompleteRate: completeRate,
+			Samples:      1,
+			RecordedAt:   now,
+		}
+		return
+	}
+	current.ReceiveRatio = current.ReceiveRatio*(1-alpha) + receiveRatio*alpha
+	current.DurationMs = current.DurationMs*(1-alpha) + durationMs*alpha
+	current.CompleteRate = current.CompleteRate*(1-alpha) + completeRate*alpha
+	current.Samples++
+	current.RecordedAt = now
+	udpChunkProgressState.ewma[key] = current
 }
 
 func recordSelectionDecision(store *core.PieceStore, pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) core.SelectionDecision {
