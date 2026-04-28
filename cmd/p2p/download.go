@@ -491,7 +491,20 @@ func pieceAttemptCandidates(contentID string, pieceIndex int, selected scheduler
 		}
 		alternatives = append(alternatives, candidate)
 	}
+	filteredAlternatives := alternatives[:0]
+	for _, candidate := range alternatives {
+		if udpSessionIsQuarantined(candidate.PeerID, time.Now()) && selected.PeerID != candidate.PeerID {
+			continue
+		}
+		filteredAlternatives = append(filteredAlternatives, candidate)
+	}
+	alternatives = filteredAlternatives
 	sort.Slice(alternatives, func(i, j int) bool {
+		leftSticky := udpSessionStickyRole(alternatives[i].PeerID, contentID, time.Now())
+		rightSticky := udpSessionStickyRole(alternatives[j].PeerID, contentID, time.Now())
+		if peerTopologyRolePriority(leftSticky) != peerTopologyRolePriority(rightSticky) {
+			return peerTopologyRolePriority(leftSticky) < peerTopologyRolePriority(rightSticky)
+		}
 		if peerTopologyRolePriority(alternatives[i].PeerTopologyRole) != peerTopologyRolePriority(alternatives[j].PeerTopologyRole) {
 			return peerTopologyRolePriority(alternatives[i].PeerTopologyRole) < peerTopologyRolePriority(alternatives[j].PeerTopologyRole)
 		}

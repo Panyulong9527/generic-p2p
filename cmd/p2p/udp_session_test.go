@@ -213,3 +213,35 @@ func TestUDPSessionPieceRoundCoolsRecommendations(t *testing.T) {
 		t.Fatalf("expected failed chunk round to cool session budget, got %+v", session)
 	}
 }
+
+func TestUDPSessionPieceSuccessCreatesStickyBulkAffinity(t *testing.T) {
+	now := time.Now()
+	peerID := "udp://session-sticky-bulk"
+	contentID := "sha256-sticky-bulk"
+
+	noteUDPSessionStageSuccess(peerID, "198.51.100.81:9003", "piece", contentID, now.Add(-2*time.Second))
+
+	if got := udpSessionStickyRole(peerID, contentID, now); got != "bulk" {
+		t.Fatalf("expected sticky bulk affinity, got %s", got)
+	}
+	if udpSessionIsQuarantined(peerID, now) {
+		t.Fatal("did not expect successful piece session to be quarantined")
+	}
+}
+
+func TestUDPSessionRepeatedPieceFailuresCreateFallbackQuarantine(t *testing.T) {
+	now := time.Now()
+	peerID := "udp://session-sticky-fallback"
+	contentID := "sha256-sticky-fallback"
+
+	noteUDPSessionStageSuccess(peerID, "198.51.100.82:9003", "piece", contentID, now.Add(-20*time.Second))
+	noteUDPSessionStageFailure(peerID, "198.51.100.82:9003", "piece", "udp_timeout", now.Add(-4*time.Second))
+	noteUDPSessionStageFailure(peerID, "198.51.100.82:9003", "piece", "udp_timeout", now.Add(-1*time.Second))
+
+	if got := udpSessionStickyRole(peerID, contentID, now); got != "fallback" {
+		t.Fatalf("expected sticky fallback affinity after failures, got %s", got)
+	}
+	if !udpSessionIsQuarantined(peerID, now) {
+		t.Fatal("expected repeated piece failures to quarantine session")
+	}
+}

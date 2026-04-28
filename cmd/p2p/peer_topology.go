@@ -31,6 +31,12 @@ func peerTopologyRoleForCandidate(contentID string, candidate scheduler.PeerCand
 	if candidate.Transport != "udp" {
 		return peerTopologyRoleBackup
 	}
+	if udpSessionIsQuarantined(candidate.PeerID, now) {
+		return peerTopologyRoleFallback
+	}
+	if stickyRole := udpSessionStickyRole(candidate.PeerID, contentID, now); stickyRole != "" && !isSuppressedDecisionRisk(candidate.UDPDecisionRisk) {
+		return stickyRole
+	}
 	if isSuppressedDecisionRisk(candidate.UDPDecisionRisk) {
 		return peerTopologyRoleFallback
 	}
@@ -66,6 +72,19 @@ func peerAssistScoreForCandidate(contentID string, candidate scheduler.PeerCandi
 		score -= 0.18
 	}
 	if candidate.Transport == "udp" {
+		if stickyRole := udpSessionStickyRole(candidate.PeerID, contentID, now); stickyRole != "" {
+			switch stickyRole {
+			case peerTopologyRoleBulk:
+				score += 0.24
+			case peerTopologyRoleAssist:
+				score += 0.12
+			case peerTopologyRoleFallback:
+				score -= 0.20
+			}
+		}
+		if udpSessionIsQuarantined(candidate.PeerID, now) {
+			score -= 0.24
+		}
 		if candidate.UDPPublicMapped {
 			score += 0.10
 		}

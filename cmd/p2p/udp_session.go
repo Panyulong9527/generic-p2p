@@ -14,6 +14,8 @@ type udpPeerSession struct {
 	PrimaryAddr              string
 	Addresses                map[string]time.Time
 	State                    string
+	PreferredRole            string
+	StickyContentID          string
 	HealthScore              float64
 	LastStage                string
 	LastErrorKind            string
@@ -31,6 +33,8 @@ type udpPeerSession struct {
 	LastFailureAt            time.Time
 	LastKeepaliveAt          time.Time
 	LastObservedAt           time.Time
+	StickyUntil              time.Time
+	QuarantineUntil          time.Time
 	ObservedSource           string
 	RecentContentIDs         map[string]time.Time
 }
@@ -127,6 +131,7 @@ func noteUDPSessionEvent(peerID string, remoteAddr string, stage string, success
 		session.LastErrorKind = strings.TrimSpace(errorKind)
 		session.HealthScore = clampUDPSessionHealth(session.HealthScore + udpSessionStageDelta(stage, false))
 	}
+	updateUDPSessionPathAffinity(&session, stage, success, contentID, now)
 	session.LastActiveAt = now
 	session.State = udpSessionStateKind(session, now)
 	refreshUDPSessionRecommendations(&session, now)
@@ -481,6 +486,28 @@ func udpSessionStateForPeer(peerID string, now time.Time) string {
 	return udpSessionStateKind(session, now)
 }
 
+func udpSessionStickyRole(peerID string, contentID string, now time.Time) string {
+	session, ok := udpSessionSnapshot(peerID, now)
+	if !ok {
+		return ""
+	}
+	if session.StickyUntil.IsZero() || now.After(session.StickyUntil) {
+		return ""
+	}
+	if strings.TrimSpace(contentID) != "" && strings.TrimSpace(session.StickyContentID) != "" && strings.TrimSpace(session.StickyContentID) != strings.TrimSpace(contentID) {
+		return ""
+	}
+	return strings.TrimSpace(session.PreferredRole)
+}
+
+func udpSessionIsQuarantined(peerID string, now time.Time) bool {
+	session, ok := udpSessionSnapshot(peerID, now)
+	if !ok {
+		return false
+	}
+	return !session.QuarantineUntil.IsZero() && now.Before(session.QuarantineUntil)
+}
+
 func udpSessionWindowBias(peerID string, now time.Time) int {
 	session, ok := udpSessionSnapshot(peerID, now)
 	if !ok {
@@ -608,6 +635,49 @@ func refreshUDPSessionRecommendations(session *udpPeerSession, now time.Time) {
 	session.RecommendedChunkWindow = clampSessionChunkWindow(session.RecommendedChunkWindow + session.ChunkWindowDelta)
 	session.RecommendedRoundTimeout = clampSessionRoundTimeout(session.RecommendedRoundTimeout + session.RoundTimeoutDelta)
 	session.RecommendedAttemptBudget = clampSessionAttemptBudget(session.RecommendedAttemptBudget + session.AttemptBudgetDelta)
+}
+
+func updateUDPSessionPathAffinity(session *udpPeerSession, stage string, success bool, contentID string, now time.Time) {
+	if session == nil {
+		return
+	}
+	stage = strings.TrimSpace(stage)
+	contentID = strings.TrimSpace(contentID)
+	if success {
+		if stage == "piece" {
+			session.PreferredRole = "bulk"
+			session.StickyContentID = contentID
+			session.StickyUntil = now.Add(20 * time.Second)
+			session.QuarantineUntil = time.Time{}
+			return
+		}
+		if stage == "have" || stage == "probe" {
+			if session.PreferredRole == "" {
+				session.PreferredRole = "assist"
+			}
+			if session.StickyUntil.Before(now.Add(10 * time.Second)) {
+				session.StickyUntil = now.Add(10 * time.Second)
+			}
+			if session.StickyContentID == "" {
+				session.StickyContentID = contentID
+			}
+		}
+		return
+	}
+	if stage == "piece" {
+		session.PreferredRole = "fallback"
+		session.StickyContentID = contentID
+		session.StickyUntil = now.Add(12 * time.Second)
+		if session.FailureStreak >= 2 || session.HealthScore <= -0.15 || strings.TrimSpace(session.LastErrorKind) != "" {
+			session.QuarantineUntil = now.Add(18 * time.Second)
+		}
+		return
+	}
+	if (stage == "probe" || stage == "have") && session.FailureStreak >= 2 {
+		if session.QuarantineUntil.Before(now.Add(10 * time.Second)) {
+			session.QuarantineUntil = now.Add(10 * time.Second)
+		}
+	}
 }
 
 func udpSessionStateKind(session udpPeerSession, now time.Time) string {

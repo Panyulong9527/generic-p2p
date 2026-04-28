@@ -171,6 +171,82 @@ func TestPieceAttemptCandidatesPrefersBetterChunkProgressOnEqualScore(t *testing
 	}
 }
 
+func TestPieceAttemptCandidatesPrefersStickyBulkAlternative(t *testing.T) {
+	now := time.Now()
+	contentID := "sha256-attempt-sticky-bulk"
+	noteUDPSessionStageSuccess("udp://alt-sticky", "198.51.100.94:9003", "piece", contentID, now.Add(-2*time.Second))
+
+	selected := scheduler.PeerCandidate{
+		PeerID:           "udp://selected",
+		Transport:        "udp",
+		Score:            1.40,
+		PeerTopologyRole: peerTopologyRoleAssist,
+		HaveRanges:       []core.HaveRange{{Start: 0, End: 5}},
+	}
+	peers := []scheduler.PeerCandidate{
+		selected,
+		{
+			PeerID:           "udp://alt-plain",
+			Transport:        "udp",
+			Score:            1.40,
+			PeerTopologyRole: peerTopologyRoleAssist,
+			HaveRanges:       []core.HaveRange{{Start: 0, End: 5}},
+		},
+		{
+			PeerID:           "udp://alt-sticky",
+			Transport:        "udp",
+			Score:            1.40,
+			PeerTopologyRole: peerTopologyRoleAssist,
+			HaveRanges:       []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	attempts := pieceAttemptCandidates(contentID, 2, selected, peers)
+	if len(attempts) < 3 || attempts[1].PeerID != "udp://alt-sticky" {
+		t.Fatalf("expected sticky bulk alternative first, got %+v", attempts)
+	}
+}
+
+func TestPieceAttemptCandidatesSkipsQuarantinedAlternative(t *testing.T) {
+	now := time.Now()
+	contentID := "sha256-attempt-quarantine"
+	noteUDPSessionStageSuccess("udp://alt-bad", "198.51.100.95:9003", "piece", contentID, now.Add(-20*time.Second))
+	noteUDPSessionStageFailure("udp://alt-bad", "198.51.100.95:9003", "piece", "udp_timeout", now.Add(-4*time.Second))
+	noteUDPSessionStageFailure("udp://alt-bad", "198.51.100.95:9003", "piece", "udp_timeout", now.Add(-1*time.Second))
+
+	selected := scheduler.PeerCandidate{
+		PeerID:           "udp://selected",
+		Transport:        "udp",
+		Score:            1.40,
+		PeerTopologyRole: peerTopologyRoleBulk,
+		HaveRanges:       []core.HaveRange{{Start: 0, End: 5}},
+	}
+	peers := []scheduler.PeerCandidate{
+		selected,
+		{
+			PeerID:           "udp://alt-good",
+			Transport:        "udp",
+			Score:            1.38,
+			PeerTopologyRole: peerTopologyRoleAssist,
+			HaveRanges:       []core.HaveRange{{Start: 0, End: 5}},
+		},
+		{
+			PeerID:           "udp://alt-bad",
+			Transport:        "udp",
+			Score:            1.50,
+			PeerTopologyRole: peerTopologyRoleAssist,
+			HaveRanges:       []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	attempts := pieceAttemptCandidates(contentID, 2, selected, peers)
+	for _, item := range attempts {
+		if item.PeerID == "udp://alt-bad" {
+			t.Fatalf("expected quarantined alternative to be skipped, got %+v", attempts)
+		}
+	}
+}
+
 func TestUDPAttemptBudgetVariesByBurstProfile(t *testing.T) {
 	if got := udpAttemptBudget("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "warm"}); got != 2 {
 		t.Fatalf("expected warm budget 2, got %d", got)

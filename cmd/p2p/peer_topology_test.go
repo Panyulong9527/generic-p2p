@@ -66,3 +66,45 @@ func TestAnnotatePeerTopologyMarksSuppressedUDPAsFallback(t *testing.T) {
 		t.Fatalf("expected fallback topology role, got %s", candidates[0].PeerTopologyRole)
 	}
 }
+
+func TestAnnotatePeerTopologyUsesStickyBulkAffinity(t *testing.T) {
+	now := time.Now()
+	contentID := "sha256-topology-sticky"
+	peerID := "udp://sticky-peer"
+	noteUDPSessionStageSuccess(peerID, "198.51.100.92:9003", "piece", contentID, now.Add(-2*time.Second))
+
+	candidates := annotatePeerTopology([]scheduler.PeerCandidate{
+		{
+			PeerID:     peerID,
+			Transport:  "udp",
+			Score:      1.12,
+			HaveRanges: []core.HaveRange{{Start: 0, End: 4}},
+		},
+	}, contentID, now)
+
+	if candidates[0].PeerTopologyRole != peerTopologyRoleBulk {
+		t.Fatalf("expected sticky bulk role, got %s", candidates[0].PeerTopologyRole)
+	}
+}
+
+func TestAnnotatePeerTopologyUsesQuarantineFallback(t *testing.T) {
+	now := time.Now()
+	contentID := "sha256-topology-quarantine"
+	peerID := "udp://quarantine-peer"
+	noteUDPSessionStageSuccess(peerID, "198.51.100.93:9003", "piece", contentID, now.Add(-20*time.Second))
+	noteUDPSessionStageFailure(peerID, "198.51.100.93:9003", "piece", "udp_timeout", now.Add(-4*time.Second))
+	noteUDPSessionStageFailure(peerID, "198.51.100.93:9003", "piece", "udp_timeout", now.Add(-1*time.Second))
+
+	candidates := annotatePeerTopology([]scheduler.PeerCandidate{
+		{
+			PeerID:     peerID,
+			Transport:  "udp",
+			Score:      1.20,
+			HaveRanges: []core.HaveRange{{Start: 0, End: 4}},
+		},
+	}, contentID, now)
+
+	if candidates[0].PeerTopologyRole != peerTopologyRoleFallback {
+		t.Fatalf("expected quarantine fallback role, got %s", candidates[0].PeerTopologyRole)
+	}
+}
