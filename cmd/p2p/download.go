@@ -480,6 +480,9 @@ func pieceAttemptCandidates(contentID string, pieceIndex int, selected scheduler
 		alternatives = append(alternatives, candidate)
 	}
 	sort.Slice(alternatives, func(i, j int) bool {
+		if progressOrder := compareUDPChunkProgress(contentID, alternatives[i].PeerID, alternatives[j].PeerID, time.Now()); progressOrder != 0 {
+			return progressOrder < 0
+		}
 		if alternatives[i].Score != alternatives[j].Score {
 			return alternatives[i].Score > alternatives[j].Score
 		}
@@ -505,7 +508,8 @@ func udpAttemptBudget(contentID string, selected scheduler.PeerCandidate) int {
 	base := udpAttemptBudgetForProfile(selected.BurstProfile)
 	stage := currentUDPBurstStageForPeer(contentID, selected.PeerID, time.Now())
 	base = stageAdjustedUDPAttemptBudget(base, stage)
-	return decisionRiskAdjustedUDPAttemptBudget(base, selected.UDPDecisionRisk)
+	base = decisionRiskAdjustedUDPAttemptBudget(base, selected.UDPDecisionRisk)
+	return progressAdjustedUDPAttemptBudget(base, contentID, selected.PeerID, time.Now())
 }
 
 func udpAttemptBudgetForProfile(profile string) int {
@@ -563,6 +567,40 @@ func decisionRiskAdjustedUDPAttemptBudget(base int, risk string) int {
 	default:
 		return base
 	}
+}
+
+func progressAdjustedUDPAttemptBudget(base int, contentID string, peerID string, now time.Time) int {
+	if smoothed, ok := smoothedUDPChunkProgress(contentID, peerID, now); ok {
+		switch {
+		case smoothed.Samples >= 2 && smoothed.CompleteRate >= 0.7 && smoothed.ReceiveRatio >= 0.85:
+			if base < 5 {
+				return base + 1
+			}
+			return 5
+		case smoothed.Samples >= 2 && smoothed.ReceiveRatio < 0.35:
+			if base > 1 {
+				return base - 1
+			}
+			return 1
+		}
+	}
+	sample, ok := recentUDPChunkProgress(contentID, peerID, now)
+	if !ok {
+		return base
+	}
+	switch {
+	case sample.Completed && sample.RequestedChunks >= 3:
+		if base < 5 {
+			return base + 1
+		}
+		return 5
+	case sample.RequestedChunks > 0 && sample.ReceivedChunks == 0:
+		if base > 1 {
+			return base - 1
+		}
+		return 1
+	}
+	return base
 }
 
 func currentUDPBurstStageForPeer(contentID string, peerID string, now time.Time) string {
@@ -929,6 +967,81 @@ func udpDecisionRiskPriority(risk string) int {
 	default:
 		return 2
 	}
+}
+
+func compareUDPChunkProgress(contentID string, leftPeerID string, rightPeerID string, now time.Time) int {
+	left, leftOK := smoothedUDPChunkProgress(contentID, leftPeerID, now)
+	right, rightOK := smoothedUDPChunkProgress(contentID, rightPeerID, now)
+	switch {
+	case leftOK && rightOK:
+		if left.CompleteRate != right.CompleteRate {
+			if left.CompleteRate > right.CompleteRate {
+				return -1
+			}
+			return 1
+		}
+		if left.ReceiveRatio != right.ReceiveRatio {
+			if left.ReceiveRatio > right.ReceiveRatio {
+				return -1
+			}
+			return 1
+		}
+		if left.DurationMs != right.DurationMs {
+			if left.DurationMs < right.DurationMs {
+				return -1
+			}
+			return 1
+		}
+	case leftOK:
+		return -1
+	case rightOK:
+		return 1
+	}
+
+	leftRecent, leftRecentOK := recentUDPChunkProgress(contentID, leftPeerID, now)
+	rightRecent, rightRecentOK := recentUDPChunkProgress(contentID, rightPeerID, now)
+	switch {
+	case leftRecentOK && rightRecentOK:
+		leftRatio := udpChunkReceiveRatio(leftRecent)
+		rightRatio := udpChunkReceiveRatio(rightRecent)
+		if leftRecent.Completed != rightRecent.Completed {
+			if leftRecent.Completed {
+				return -1
+			}
+			return 1
+		}
+		if leftRatio != rightRatio {
+			if leftRatio > rightRatio {
+				return -1
+			}
+			return 1
+		}
+		if leftRecent.Duration != rightRecent.Duration {
+			if leftRecent.Duration < rightRecent.Duration {
+				return -1
+			}
+			return 1
+		}
+	case leftRecentOK:
+		return -1
+	case rightRecentOK:
+		return 1
+	}
+	return 0
+}
+
+func udpChunkReceiveRatio(sample udpChunkProgressSample) float64 {
+	if sample.RequestedChunks <= 0 {
+		return 0
+	}
+	ratio := float64(sample.ReceivedChunks) / float64(sample.RequestedChunks)
+	if ratio < 0 {
+		return 0
+	}
+	if ratio > 1 {
+		return 1
+	}
+	return ratio
 }
 
 func reportTrackerTransferPath(logger *logging.Logger, discovery peerDiscoveryOptions, contentID string, candidate scheduler.PeerCandidate) {

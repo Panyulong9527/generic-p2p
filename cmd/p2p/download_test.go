@@ -123,6 +123,54 @@ func TestPieceAttemptCandidatesPrefersLowerRiskUDPAlternativesOnEqualScore(t *te
 	}
 }
 
+func TestPieceAttemptCandidatesPrefersBetterChunkProgressOnEqualScore(t *testing.T) {
+	now := time.Now()
+	const contentID = "sha256-download-alt-progress"
+	selected := scheduler.PeerCandidate{
+		PeerID:       "udp://selected-progress",
+		Transport:    "udp",
+		BurstProfile: "aggressive",
+		Score:        1.4,
+		HaveRanges:   []core.HaveRange{{Start: 0, End: 5}},
+	}
+	recordUDPChunkProgress(contentID, "udp://alt-fast", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  4,
+		Duration:        700 * time.Millisecond,
+		Completed:       true,
+	}, now.Add(-3*time.Second))
+	recordUDPChunkProgress(contentID, "udp://alt-fast", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  4,
+		Duration:        760 * time.Millisecond,
+		Completed:       true,
+	}, now.Add(-1*time.Second))
+	recordUDPChunkProgress(contentID, "udp://alt-slow", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  1,
+		Duration:        1500 * time.Millisecond,
+	}, now.Add(-3*time.Second))
+	recordUDPChunkProgress(contentID, "udp://alt-slow", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  1,
+		Duration:        1450 * time.Millisecond,
+	}, now.Add(-1*time.Second))
+
+	peers := []scheduler.PeerCandidate{
+		selected,
+		{PeerID: "udp://alt-slow", Transport: "udp", Score: 1.3, HaveRanges: []core.HaveRange{{Start: 0, End: 5}}},
+		{PeerID: "udp://alt-fast", Transport: "udp", Score: 1.3, HaveRanges: []core.HaveRange{{Start: 0, End: 5}}},
+	}
+
+	attempts := pieceAttemptCandidates(contentID, 2, selected, peers)
+	if len(attempts) < 3 {
+		t.Fatalf("expected selected plus two alternatives, got %+v", attempts)
+	}
+	if attempts[1].PeerID != "udp://alt-fast" {
+		t.Fatalf("expected better chunk-progress alternative first, got %+v", attempts)
+	}
+}
+
 func TestUDPAttemptBudgetVariesByBurstProfile(t *testing.T) {
 	if got := udpAttemptBudget("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "warm"}); got != 2 {
 		t.Fatalf("expected warm budget 2, got %d", got)
@@ -158,6 +206,49 @@ func TestUDPAttemptBudgetAdjustsByDecisionRisk(t *testing.T) {
 	}
 	if got := udpAttemptBudget("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "warm", UDPDecisionRisk: "stable"}); got != 3 {
 		t.Fatalf("expected stable risk to widen warm budget to 3, got %d", got)
+	}
+}
+
+func TestUDPAttemptBudgetAdjustsBySmoothedChunkProgress(t *testing.T) {
+	now := time.Now()
+	const contentID = "sha256-download-budget-progress"
+
+	recordUDPChunkProgress(contentID, "udp://budget-fast-peer", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  4,
+		Duration:        700 * time.Millisecond,
+		Completed:       true,
+	}, now.Add(-3*time.Second))
+	recordUDPChunkProgress(contentID, "udp://budget-fast-peer", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  4,
+		Duration:        720 * time.Millisecond,
+		Completed:       true,
+	}, now.Add(-1*time.Second))
+
+	recordUDPChunkProgress(contentID, "udp://budget-weak-peer", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  1,
+		Duration:        1500 * time.Millisecond,
+	}, now.Add(-3*time.Second))
+	recordUDPChunkProgress(contentID, "udp://budget-weak-peer", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  1,
+		Duration:        1400 * time.Millisecond,
+	}, now.Add(-1*time.Second))
+
+	if got := udpAttemptBudget(contentID, scheduler.PeerCandidate{
+		Transport: "udp",
+		PeerID:    "udp://budget-fast-peer",
+	}); got != 4 {
+		t.Fatalf("expected smoothed strong progress to widen default budget to 4, got %d", got)
+	}
+
+	if got := udpAttemptBudget(contentID, scheduler.PeerCandidate{
+		Transport: "udp",
+		PeerID:    "udp://budget-weak-peer",
+	}); got != 2 {
+		t.Fatalf("expected smoothed weak progress to shrink default budget to 2, got %d", got)
 	}
 }
 
