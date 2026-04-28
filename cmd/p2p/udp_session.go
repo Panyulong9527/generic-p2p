@@ -28,6 +28,8 @@ type udpPeerSession struct {
 	ChunkWindowDelta         int
 	RoundTimeoutDelta        time.Duration
 	AttemptBudgetDelta       int
+	PipelineDepth            int
+	PipelineUntil            time.Time
 	LastActiveAt             time.Time
 	LastSuccessAt            time.Time
 	LastFailureAt            time.Time
@@ -199,6 +201,10 @@ func noteUDPSessionPieceRound(peerID string, remoteAddr string, stats p2pnet.UDP
 		if session.AttemptBudgetDelta < 1 {
 			session.AttemptBudgetDelta++
 		}
+		if session.PipelineDepth < 2 {
+			session.PipelineDepth++
+		}
+		session.PipelineUntil = now.Add(18 * time.Second)
 	case stats.RequestedChunks > 0 && stats.ReceivedChunks == 0:
 		if session.ChunkWindowDelta > -1 {
 			session.ChunkWindowDelta--
@@ -209,6 +215,12 @@ func noteUDPSessionPieceRound(peerID string, remoteAddr string, stats p2pnet.UDP
 		if session.AttemptBudgetDelta > -1 {
 			session.AttemptBudgetDelta--
 		}
+		if session.PipelineDepth > 0 {
+			session.PipelineDepth--
+		}
+		if session.PipelineDepth == 0 {
+			session.PipelineUntil = time.Time{}
+		}
 	case receiveRatio < 0.5:
 		if session.ChunkWindowDelta > -1 {
 			session.ChunkWindowDelta--
@@ -216,12 +228,24 @@ func noteUDPSessionPieceRound(peerID string, remoteAddr string, stats p2pnet.UDP
 		if session.RoundTimeoutDelta < 200*time.Millisecond {
 			session.RoundTimeoutDelta += 100 * time.Millisecond
 		}
+		if session.PipelineDepth > 0 {
+			session.PipelineDepth--
+		}
+		if session.PipelineDepth == 0 {
+			session.PipelineUntil = time.Time{}
+		}
 	case receiveRatio >= 0.85 && stats.Duration <= 900*time.Millisecond:
 		if session.ChunkWindowDelta < 1 {
 			session.ChunkWindowDelta++
 		}
 		if session.RoundTimeoutDelta > -150*time.Millisecond {
 			session.RoundTimeoutDelta -= 50 * time.Millisecond
+		}
+		if session.PipelineDepth < 1 {
+			session.PipelineDepth = 1
+		}
+		if session.PipelineUntil.Before(now.Add(12 * time.Second)) {
+			session.PipelineUntil = now.Add(12 * time.Second)
 		}
 	}
 	session.LastActiveAt = now
@@ -513,20 +537,25 @@ func udpSessionWindowBias(peerID string, now time.Time) int {
 	if !ok {
 		return 0
 	}
+	bias := 0
 	if session.RecommendedChunkWindow > 0 {
-		return session.RecommendedChunkWindow - 4
-	}
-	switch udpSessionStateKind(session, now) {
-	case "active":
-		if session.HealthScore >= 0.45 {
-			return 2
+		bias = session.RecommendedChunkWindow - 4
+	} else {
+		switch udpSessionStateKind(session, now) {
+		case "active":
+			if session.HealthScore >= 0.45 {
+				bias = 2
+			} else {
+				bias = 1
+			}
+		case "cooling":
+			bias = -1
 		}
-		return 1
-	case "cooling":
-		return -1
-	default:
-		return 0
 	}
+	if udpSessionPipelineActive(session, now) {
+		bias += session.PipelineDepth
+	}
+	return bias
 }
 
 func udpSessionRoundTimeoutBias(peerID string, now time.Time) time.Duration {
@@ -534,22 +563,27 @@ func udpSessionRoundTimeoutBias(peerID string, now time.Time) time.Duration {
 	if !ok {
 		return 0
 	}
+	bias := time.Duration(0)
 	if session.RecommendedRoundTimeout > 0 {
-		return session.RecommendedRoundTimeout - time.Second
-	}
-	switch udpSessionStateKind(session, now) {
-	case "active":
-		if session.HealthScore >= 0.45 {
-			return -200 * time.Millisecond
+		bias = session.RecommendedRoundTimeout - time.Second
+	} else {
+		switch udpSessionStateKind(session, now) {
+		case "active":
+			if session.HealthScore >= 0.45 {
+				bias = -200 * time.Millisecond
+			} else {
+				bias = -150 * time.Millisecond
+			}
+		case "warm":
+			bias = -50 * time.Millisecond
+		case "cooling":
+			bias = 250 * time.Millisecond
 		}
-		return -150 * time.Millisecond
-	case "warm":
-		return -50 * time.Millisecond
-	case "cooling":
-		return 250 * time.Millisecond
-	default:
-		return 0
 	}
+	if udpSessionPipelineActive(session, now) {
+		bias -= time.Duration(session.PipelineDepth) * 120 * time.Millisecond
+	}
+	return bias
 }
 
 func udpSessionAttemptBudgetBias(peerID string, now time.Time) int {
@@ -557,20 +591,25 @@ func udpSessionAttemptBudgetBias(peerID string, now time.Time) int {
 	if !ok {
 		return 0
 	}
+	bias := 0
 	if session.RecommendedAttemptBudget > 0 {
-		return session.RecommendedAttemptBudget - 3
-	}
-	switch udpSessionStateKind(session, now) {
-	case "active":
-		if session.HealthScore >= 0.45 {
-			return 2
+		bias = session.RecommendedAttemptBudget - 3
+	} else {
+		switch udpSessionStateKind(session, now) {
+		case "active":
+			if session.HealthScore >= 0.45 {
+				bias = 2
+			} else {
+				bias = 1
+			}
+		case "cooling":
+			bias = -1
 		}
-		return 1
-	case "cooling":
-		return -1
-	default:
-		return 0
 	}
+	if udpSessionPipelineActive(session, now) {
+		bias += session.PipelineDepth
+	}
+	return bias
 }
 
 func sessionHasAddr(session udpPeerSession, remoteAddr string) bool {
@@ -635,6 +674,11 @@ func refreshUDPSessionRecommendations(session *udpPeerSession, now time.Time) {
 	session.RecommendedChunkWindow = clampSessionChunkWindow(session.RecommendedChunkWindow + session.ChunkWindowDelta)
 	session.RecommendedRoundTimeout = clampSessionRoundTimeout(session.RecommendedRoundTimeout + session.RoundTimeoutDelta)
 	session.RecommendedAttemptBudget = clampSessionAttemptBudget(session.RecommendedAttemptBudget + session.AttemptBudgetDelta)
+	if udpSessionPipelineActive(*session, now) {
+		session.RecommendedChunkWindow = clampSessionChunkWindow(session.RecommendedChunkWindow + session.PipelineDepth)
+		session.RecommendedRoundTimeout = clampSessionRoundTimeout(session.RecommendedRoundTimeout - time.Duration(session.PipelineDepth)*120*time.Millisecond)
+		session.RecommendedAttemptBudget = clampSessionAttemptBudget(session.RecommendedAttemptBudget + session.PipelineDepth)
+	}
 }
 
 func updateUDPSessionPathAffinity(session *udpPeerSession, stage string, success bool, contentID string, now time.Time) {
@@ -757,6 +801,10 @@ func clampSessionAttemptBudget(budget int) int {
 		return 5
 	}
 	return budget
+}
+
+func udpSessionPipelineActive(session udpPeerSession, now time.Time) bool {
+	return session.PipelineDepth > 0 && !session.PipelineUntil.IsZero() && now.Before(session.PipelineUntil)
 }
 
 func maxSessionTime(left time.Time, right time.Time) time.Time {

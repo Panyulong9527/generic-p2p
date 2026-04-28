@@ -245,3 +245,64 @@ func TestUDPSessionRepeatedPieceFailuresCreateFallbackQuarantine(t *testing.T) {
 		t.Fatal("expected repeated piece failures to quarantine session")
 	}
 }
+
+func TestUDPSessionPipelineBoostCarriesAcrossPieces(t *testing.T) {
+	now := time.Now()
+	peerID := "udp://session-pipeline-boost"
+	contentID := "sha256-pipeline-boost"
+
+	noteUDPSessionSuccess(peerID, "198.51.100.83:9003", contentID, now.Add(-5*time.Second))
+	noteUDPSessionPieceRound(peerID, "198.51.100.83:9003", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  4,
+		Duration:        700 * time.Millisecond,
+		Completed:       true,
+	}, now)
+
+	session, ok := udpSessionSnapshot(peerID, now)
+	if !ok {
+		t.Fatal("expected session snapshot")
+	}
+	if !udpSessionPipelineActive(session, now) {
+		t.Fatal("expected pipeline boost to become active after strong round")
+	}
+	if session.PipelineDepth < 1 {
+		t.Fatalf("expected positive pipeline depth, got %+v", session)
+	}
+	if udpSessionWindowBias(peerID, now) < 3 {
+		t.Fatalf("expected boosted session window bias after pipeline warmup, got %d", udpSessionWindowBias(peerID, now))
+	}
+	if udpSessionAttemptBudgetBias(peerID, now) < 3 {
+		t.Fatalf("expected boosted session budget bias after pipeline warmup, got %d", udpSessionAttemptBudgetBias(peerID, now))
+	}
+}
+
+func TestUDPSessionPipelineBoostCoolsAfterEmptyRound(t *testing.T) {
+	now := time.Now()
+	peerID := "udp://session-pipeline-cool"
+	contentID := "sha256-pipeline-cool"
+
+	noteUDPSessionSuccess(peerID, "198.51.100.84:9003", contentID, now.Add(-6*time.Second))
+	noteUDPSessionPieceRound(peerID, "198.51.100.84:9003", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  4,
+		Duration:        720 * time.Millisecond,
+		Completed:       true,
+	}, now.Add(-2*time.Second))
+	noteUDPSessionPieceRound(peerID, "198.51.100.84:9003", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  0,
+		Duration:        1400 * time.Millisecond,
+	}, now)
+
+	session, ok := udpSessionSnapshot(peerID, now)
+	if !ok {
+		t.Fatal("expected session snapshot")
+	}
+	if session.PipelineDepth != 0 {
+		t.Fatalf("expected empty round to clear pipeline depth, got %+v", session)
+	}
+	if udpSessionPipelineActive(session, now) {
+		t.Fatal("expected pipeline boost to cool down after empty round")
+	}
+}
