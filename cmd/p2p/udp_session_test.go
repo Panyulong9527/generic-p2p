@@ -82,6 +82,30 @@ func TestUDPSessionStateTransitions(t *testing.T) {
 	if got := udpSessionStateForPeer(coolingPeer, now); got != "cooling" {
 		t.Fatalf("expected cooling session state, got %s", got)
 	}
+
+	activeSession, ok := udpSessionSnapshot(activePeer, now)
+	if !ok {
+		t.Fatal("expected active session snapshot")
+	}
+	if activeSession.RecommendedChunkWindow != 5 || activeSession.RecommendedAttemptBudget != 4 || activeSession.RecommendedRoundTimeout != 850*time.Millisecond {
+		t.Fatalf("unexpected active session recommendations: %+v", activeSession)
+	}
+
+	warmSession, ok := udpSessionSnapshot(warmPeer, now)
+	if !ok {
+		t.Fatal("expected warm session snapshot")
+	}
+	if warmSession.RecommendedChunkWindow != 4 || warmSession.RecommendedAttemptBudget != 3 || warmSession.RecommendedRoundTimeout != 950*time.Millisecond {
+		t.Fatalf("unexpected warm session recommendations: %+v", warmSession)
+	}
+
+	coolingSession, ok := udpSessionSnapshot(coolingPeer, now)
+	if !ok {
+		t.Fatal("expected cooling session snapshot")
+	}
+	if coolingSession.RecommendedChunkWindow != 3 || coolingSession.RecommendedAttemptBudget != 2 || coolingSession.RecommendedRoundTimeout != 1250*time.Millisecond {
+		t.Fatalf("unexpected cooling session recommendations: %+v", coolingSession)
+	}
 }
 
 func TestUDPSessionHealthTracksStageEvents(t *testing.T) {
@@ -104,6 +128,9 @@ func TestUDPSessionHealthTracksStageEvents(t *testing.T) {
 	}
 	if session.State != "active" {
 		t.Fatalf("expected active state after staged successes, got %s", session.State)
+	}
+	if session.RecommendedChunkWindow != 6 || session.RecommendedAttemptBudget != 5 || session.RecommendedRoundTimeout != 800*time.Millisecond {
+		t.Fatalf("expected stronger active recommendations after healthy stages, got %+v", session)
 	}
 }
 

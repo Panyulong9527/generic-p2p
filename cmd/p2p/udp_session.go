@@ -8,22 +8,26 @@ import (
 )
 
 type udpPeerSession struct {
-	PeerID           string
-	PrimaryAddr      string
-	Addresses        map[string]time.Time
-	State            string
-	HealthScore      float64
-	LastStage        string
-	LastErrorKind    string
-	SuccessStreak    int
-	FailureStreak    int
-	LastActiveAt     time.Time
-	LastSuccessAt    time.Time
-	LastFailureAt    time.Time
-	LastKeepaliveAt  time.Time
-	LastObservedAt   time.Time
-	ObservedSource   string
-	RecentContentIDs map[string]time.Time
+	PeerID                   string
+	PrimaryAddr              string
+	Addresses                map[string]time.Time
+	State                    string
+	HealthScore              float64
+	LastStage                string
+	LastErrorKind            string
+	SuccessStreak            int
+	FailureStreak            int
+	RecommendedChunkWindow   int
+	RecommendedRoundTimeout  time.Duration
+	RecommendedAttemptBudget int
+	KeepaliveInterval        time.Duration
+	LastActiveAt             time.Time
+	LastSuccessAt            time.Time
+	LastFailureAt            time.Time
+	LastKeepaliveAt          time.Time
+	LastObservedAt           time.Time
+	ObservedSource           string
+	RecentContentIDs         map[string]time.Time
 }
 
 var udpSessionState = struct {
@@ -56,6 +60,7 @@ func noteUDPSessionAddr(peerID string, remoteAddr string, source string, content
 	session.LastObservedAt = now
 	session.LastActiveAt = maxSessionTime(session.LastActiveAt, now)
 	session.State = udpSessionStateKind(session, now)
+	refreshUDPSessionRecommendations(&session, now)
 	if strings.TrimSpace(source) != "" {
 		session.ObservedSource = strings.TrimSpace(source)
 	}
@@ -119,6 +124,7 @@ func noteUDPSessionEvent(peerID string, remoteAddr string, stage string, success
 	}
 	session.LastActiveAt = now
 	session.State = udpSessionStateKind(session, now)
+	refreshUDPSessionRecommendations(&session, now)
 	if strings.TrimSpace(contentID) != "" {
 		session.RecentContentIDs[strings.TrimSpace(contentID)] = now
 	}
@@ -148,6 +154,7 @@ func noteUDPSessionKeepalive(peerID string, remoteAddr string, now time.Time) {
 	session.LastKeepaliveAt = now
 	session.LastActiveAt = maxSessionTime(session.LastActiveAt, now)
 	session.State = udpSessionStateKind(session, now)
+	refreshUDPSessionRecommendations(&session, now)
 	udpSessionState.sessions[peerID] = session
 }
 
@@ -218,6 +225,7 @@ func udpSessionShouldSendKeepalive(peerID string, remoteAddr string, now time.Ti
 	session.LastKeepaliveAt = now
 	session.LastActiveAt = maxSessionTime(session.LastActiveAt, now)
 	session.State = udpSessionStateKind(session, now)
+	refreshUDPSessionRecommendations(&session, now)
 	udpSessionState.sessions[strings.TrimSpace(peerID)] = session
 	return true
 }
@@ -314,6 +322,7 @@ func pruneUDPSession(session udpPeerSession, now time.Time) udpPeerSession {
 		}
 	}
 	session.State = udpSessionStateKind(session, now)
+	refreshUDPSessionRecommendations(&session, now)
 	return session
 }
 
@@ -348,6 +357,9 @@ func sessionShouldKeepAlive(session udpPeerSession, contentID string, now time.T
 }
 
 func udpSessionKeepaliveInterval(session udpPeerSession, now time.Time) time.Duration {
+	if session.KeepaliveInterval > 0 {
+		return session.KeepaliveInterval
+	}
 	switch udpSessionStateKind(session, now) {
 	case "active":
 		return 6 * time.Second
@@ -372,6 +384,9 @@ func udpSessionWindowBias(peerID string, now time.Time) int {
 	if !ok {
 		return 0
 	}
+	if session.RecommendedChunkWindow > 0 {
+		return session.RecommendedChunkWindow - 4
+	}
 	switch udpSessionStateKind(session, now) {
 	case "active":
 		if session.HealthScore >= 0.45 {
@@ -389,6 +404,9 @@ func udpSessionRoundTimeoutBias(peerID string, now time.Time) time.Duration {
 	session, ok := udpSessionSnapshot(peerID, now)
 	if !ok {
 		return 0
+	}
+	if session.RecommendedRoundTimeout > 0 {
+		return session.RecommendedRoundTimeout - time.Second
 	}
 	switch udpSessionStateKind(session, now) {
 	case "active":
@@ -409,6 +427,9 @@ func udpSessionAttemptBudgetBias(peerID string, now time.Time) int {
 	session, ok := udpSessionSnapshot(peerID, now)
 	if !ok {
 		return 0
+	}
+	if session.RecommendedAttemptBudget > 0 {
+		return session.RecommendedAttemptBudget - 3
 	}
 	switch udpSessionStateKind(session, now) {
 	case "active":
@@ -447,6 +468,41 @@ func cloneUDPSession(session udpPeerSession) udpPeerSession {
 		}
 	}
 	return clone
+}
+
+func refreshUDPSessionRecommendations(session *udpPeerSession, now time.Time) {
+	if session == nil {
+		return
+	}
+	state := udpSessionStateKind(*session, now)
+	session.State = state
+	switch state {
+	case "active":
+		session.RecommendedChunkWindow = 5
+		session.RecommendedRoundTimeout = 850 * time.Millisecond
+		session.RecommendedAttemptBudget = 4
+		session.KeepaliveInterval = 6 * time.Second
+		if session.HealthScore >= 0.45 {
+			session.RecommendedChunkWindow = 6
+			session.RecommendedRoundTimeout = 800 * time.Millisecond
+			session.RecommendedAttemptBudget = 5
+		}
+	case "warm":
+		session.RecommendedChunkWindow = 4
+		session.RecommendedRoundTimeout = 950 * time.Millisecond
+		session.RecommendedAttemptBudget = 3
+		session.KeepaliveInterval = 10 * time.Second
+	case "cooling":
+		session.RecommendedChunkWindow = 3
+		session.RecommendedRoundTimeout = 1250 * time.Millisecond
+		session.RecommendedAttemptBudget = 2
+		session.KeepaliveInterval = 15 * time.Second
+	default:
+		session.RecommendedChunkWindow = 4
+		session.RecommendedRoundTimeout = time.Second
+		session.RecommendedAttemptBudget = 3
+		session.KeepaliveInterval = 15 * time.Second
+	}
 }
 
 func udpSessionStateKind(session udpPeerSession, now time.Time) string {
