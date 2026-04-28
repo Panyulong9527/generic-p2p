@@ -350,6 +350,9 @@ func trackerUDPDecisionSummary(item tracker.UDPDecisionStatus) string {
 	if item.UDPTimeoutMs > 0 {
 		summary += fmt.Sprintf("/t%dms", item.UDPTimeoutMs)
 	}
+	if strings.TrimSpace(item.Reason) == "selected_udp_public_mapped_close_score" {
+		summary += "/pm"
+	}
 	return summary
 }
 

@@ -1031,6 +1031,7 @@ const webAppHTML = `<!doctype html>
       }
       const profile = String(item.burstProfile || '');
       const stage = String(item.lastStage || '').trim();
+      const reason = String(item.reason || '').trim();
       let label = 'decision ' + profile;
       if (stage) {
         label += ' / ' + stage;
@@ -1038,6 +1039,9 @@ const webAppHTML = `<!doctype html>
       label += ' / b' + Number(item.udpBudget || 0);
       if (Number(item.udpTimeoutMs || 0) > 0) {
         label += ' / t' + Number(item.udpTimeoutMs || 0) + 'ms';
+      }
+      if (reason === 'selected_udp_public_mapped_close_score') {
+        label += ' / public mapped';
       }
       if (profile === 'aggressive') {
         return '<span class="chip chip-fail">' + escapeHTML(label) + '</span>';
