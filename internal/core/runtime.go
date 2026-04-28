@@ -59,6 +59,7 @@ type SelectionDecision struct {
 type UDPBurstProfileStatus struct {
 	PeerID        string `json:"peerId"`
 	Profile       string `json:"profile"`
+	LastStage     string `json:"lastStage,omitempty"`
 	LastSuccessAt string `json:"lastSuccessAt,omitempty"`
 	LastFailureAt string `json:"lastFailureAt,omitempty"`
 	FailureCount  int    `json:"failureCount"`

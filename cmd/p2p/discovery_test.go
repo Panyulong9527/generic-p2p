@@ -512,7 +512,7 @@ func TestAdaptiveResponderBurstPhasesUsesAggressiveProfileWithoutObservedAddr(t 
 
 func TestLearnedUDPBurstPhasesReusesRecentSuccessfulProfile(t *testing.T) {
 	now := time.Unix(1300, 0)
-	recordUDPBurstOutcome("sha256-demo", "peer-f", "warm", true, now.Add(-5*time.Second))
+	recordUDPBurstOutcome("sha256-demo", "peer-f", "warm", "probe", true, now.Add(-5*time.Second))
 
 	got, ok := learnedUDPBurstPhases("sha256-demo", "peer-f", now)
 	if !ok {
@@ -526,8 +526,8 @@ func TestLearnedUDPBurstPhasesReusesRecentSuccessfulProfile(t *testing.T) {
 
 func TestLearnedUDPBurstPhasesEscalatesAfterRepeatedRecentFailures(t *testing.T) {
 	now := time.Unix(1400, 0)
-	recordUDPBurstOutcome("sha256-demo", "peer-g", "default", false, now.Add(-8*time.Second))
-	recordUDPBurstOutcome("sha256-demo", "peer-g", "default", false, now.Add(-3*time.Second))
+	recordUDPBurstOutcome("sha256-demo", "peer-g", "default", "probe", false, now.Add(-8*time.Second))
+	recordUDPBurstOutcome("sha256-demo", "peer-g", "default", "probe", false, now.Add(-3*time.Second))
 
 	got, ok := learnedUDPBurstPhases("sha256-demo", "peer-g", now)
 	if !ok {
@@ -541,8 +541,8 @@ func TestLearnedUDPBurstPhasesEscalatesAfterRepeatedRecentFailures(t *testing.T)
 
 func TestCurrentUDPBurstProfilesReturnsPerPeerSnapshot(t *testing.T) {
 	now := time.Unix(1500, 0)
-	recordUDPBurstOutcome("sha256-demo", "peer-h", "warm", true, now.Add(-6*time.Second))
-	recordUDPBurstOutcome("sha256-demo", "peer-i", "default", false, now.Add(-4*time.Second))
+	recordUDPBurstOutcome("sha256-demo", "peer-h", "warm", "have", true, now.Add(-6*time.Second))
+	recordUDPBurstOutcome("sha256-demo", "peer-i", "default", "piece", false, now.Add(-4*time.Second))
 
 	got := currentUDPBurstProfiles("sha256-demo", now)
 	if len(got) < 2 {
@@ -554,12 +554,27 @@ func TestCurrentUDPBurstProfilesReturnsPerPeerSnapshot(t *testing.T) {
 	for _, profile := range got {
 		switch profile.PeerID {
 		case "peer-h":
-			foundWarm = profile.Profile == "warm" && profile.LastSuccessAt != ""
+			foundWarm = profile.Profile == "warm" && profile.LastSuccessAt != "" && profile.LastStage == "have"
 		case "peer-i":
-			foundDefault = profile.Profile == "default" && profile.LastFailureAt != "" && profile.FailureCount >= 1
+			foundDefault = profile.Profile == "default" && profile.LastFailureAt != "" && profile.FailureCount >= 1 && profile.LastStage == "piece"
 		}
 	}
 	if !foundWarm || !foundDefault {
 		t.Fatalf("expected peer-h warm and peer-i default profiles in snapshot, got %+v", got)
+	}
+}
+
+func TestLearnedUDPBurstPhasesEscalatesPieceFailuresMoreGradually(t *testing.T) {
+	now := time.Unix(1600, 0)
+	recordUDPBurstOutcome("sha256-demo", "peer-piece", "warm", "piece", false, now.Add(-7*time.Second))
+	recordUDPBurstOutcome("sha256-demo", "peer-piece", "warm", "piece", false, now.Add(-2*time.Second))
+
+	got, ok := learnedUDPBurstPhases("sha256-demo", "peer-piece", now)
+	if !ok {
+		t.Fatal("expected learned burst phases to exist after repeated recent piece failures")
+	}
+	want := defaultUDPBurstPhases()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected piece failures to step warm profile up to default phases %v, got %v", want, got)
 	}
 }

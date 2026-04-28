@@ -156,9 +156,10 @@ func printPrettyStatus(status core.StoreStatus) {
 				result = "unknown"
 			}
 			fmt.Printf(
-				"  %s profile=%s last=%s at=%s failures=%d\n",
+				"  %s profile=%s stage=%s last=%s at=%s failures=%d\n",
 				profile.PeerID,
 				profile.Profile,
+				emptyDashStatus(profile.LastStage),
 				result,
 				last,
 				profile.FailureCount,
@@ -224,6 +225,13 @@ func formatBytes(value int64) string {
 
 	suffixes := []string{"KiB", "MiB", "GiB", "TiB", "PiB", "EiB"}
 	return fmt.Sprintf("%.1f %s", float64(value)/float64(div), suffixes[exp])
+}
+
+func emptyDashStatus(value string) string {
+	if value == "" {
+		return "-"
+	}
+	return value
 }
 
 func activeDownloadAge(active core.ActiveDownload, now time.Time) string {

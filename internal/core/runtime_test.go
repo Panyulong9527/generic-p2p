@@ -143,11 +143,13 @@ func TestRuntimeStatsPersistsUDPBurstProfiles(t *testing.T) {
 		{
 			PeerID:        "peer-a",
 			Profile:       "warm",
+			LastStage:     "probe",
 			LastSuccessAt: time.Unix(1700000300, 0).Format(time.RFC3339),
 		},
 		{
 			PeerID:        "peer-b",
 			Profile:       "aggressive",
+			LastStage:     "piece",
 			LastFailureAt: time.Unix(1700000310, 0).Format(time.RFC3339),
 			FailureCount:  2,
 		},
@@ -165,6 +167,9 @@ func TestRuntimeStatsPersistsUDPBurstProfiles(t *testing.T) {
 		t.Fatalf("expected two udp burst profiles, got %+v", snapshot.UDPBurstProfiles)
 	}
 	if snapshot.UDPBurstProfiles[0].PeerID != "peer-a" || snapshot.UDPBurstProfiles[1].FailureCount != 2 {
+		t.Fatalf("unexpected udp burst profiles: %+v", snapshot.UDPBurstProfiles)
+	}
+	if snapshot.UDPBurstProfiles[0].LastStage != "probe" || snapshot.UDPBurstProfiles[1].LastStage != "piece" {
 		t.Fatalf("unexpected udp burst profiles: %+v", snapshot.UDPBurstProfiles)
 	}
 }

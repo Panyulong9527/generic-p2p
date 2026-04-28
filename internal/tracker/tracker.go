@@ -91,6 +91,7 @@ type ReportUDPBurstProfileRequest struct {
 	ContentID     string `json:"contentId"`
 	Profile       string `json:"profile"`
 	LastOutcome   string `json:"lastOutcome,omitempty"`
+	LastStage     string `json:"lastStage,omitempty"`
 	FailureCount  int    `json:"failureCount"`
 	LastOutcomeAt string `json:"lastOutcomeAt,omitempty"`
 }
@@ -141,6 +142,7 @@ type UDPBurstProfileStatus struct {
 	ContentID      string `json:"contentId,omitempty"`
 	Profile        string `json:"profile"`
 	LastOutcome    string `json:"lastOutcome,omitempty"`
+	LastStage      string `json:"lastStage,omitempty"`
 	FailureCount   int    `json:"failureCount"`
 	LastReportedAt int64  `json:"lastReportedAt,omitempty"`
 	LastOutcomeAt  string `json:"lastOutcomeAt,omitempty"`
@@ -197,6 +199,7 @@ type udpBurstProfileSummary struct {
 	ContentID      string
 	Profile        string
 	LastOutcome    string
+	LastStage      string
 	FailureCount   int
 	LastReportedAt int64
 	LastOutcomeAt  string
@@ -616,6 +619,7 @@ func (s *Server) handleReportUDPBurstProfile(w http.ResponseWriter, r *http.Requ
 		ContentID:      req.ContentID,
 		Profile:        req.Profile,
 		LastOutcome:    req.LastOutcome,
+		LastStage:      req.LastStage,
 		FailureCount:   req.FailureCount,
 		LastReportedAt: time.Now().Unix(),
 		LastOutcomeAt:  req.LastOutcomeAt,
@@ -742,6 +746,7 @@ func (s *Server) Status() StatusResponse {
 			ContentID:      summary.ContentID,
 			Profile:        summary.Profile,
 			LastOutcome:    summary.LastOutcome,
+			LastStage:      summary.LastStage,
 			FailureCount:   summary.FailureCount,
 			LastReportedAt: summary.LastReportedAt,
 			LastOutcomeAt:  summary.LastOutcomeAt,
@@ -1015,12 +1020,13 @@ func (c *Client) ReportUDPKeepaliveResult(ctx context.Context, targetPeerID stri
 	return c.postJSON(ctx, "/v1/udp/keepalives/report", reqBody, nil)
 }
 
-func (c *Client) ReportUDPBurstProfile(ctx context.Context, targetPeerID string, contentID string, profile string, lastOutcome string, failureCount int, lastOutcomeAt string) error {
+func (c *Client) ReportUDPBurstProfile(ctx context.Context, targetPeerID string, contentID string, profile string, lastOutcome string, lastStage string, failureCount int, lastOutcomeAt string) error {
 	reqBody := ReportUDPBurstProfileRequest{
 		TargetPeerID:  targetPeerID,
 		ContentID:     contentID,
 		Profile:       profile,
 		LastOutcome:   lastOutcome,
+		LastStage:     lastStage,
 		FailureCount:  failureCount,
 		LastOutcomeAt: lastOutcomeAt,
 	}

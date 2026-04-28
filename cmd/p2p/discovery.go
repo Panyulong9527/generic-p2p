@@ -22,10 +22,12 @@ type udpPeerPreference struct {
 }
 
 type udpBurstProfileStats struct {
-	LastProfile   string
-	LastSuccessAt time.Time
-	LastFailureAt time.Time
-	FailureCount  int
+	LastProfile      string
+	LastSuccessAt    time.Time
+	LastSuccessStage string
+	LastFailureAt    time.Time
+	LastFailureStage string
+	FailureCount     int
 }
 
 var udpBurstLearningState = struct {
@@ -159,7 +161,7 @@ func maybeRequesterSideBurstPunch(logger *logging.Logger, contentID string, peer
 			if err := p2pnet.NewUDPClient(target, 1500*time.Millisecond).
 				WithLocalAddr(selfUDPListenAddr).
 				ProbeMultiBurstForPeer(contentID, peer.PeerID, phases); err != nil {
-				recordUDPBurstOutcome(contentID, peer.PeerID, profile, false, time.Now())
+				recordUDPBurstOutcome(contentID, peer.PeerID, profile, "probe", false, time.Now())
 				logger.Info("tracker_udp_requester_burst_probe_failed",
 					"contentId", contentID,
 					"peerId", peer.PeerID,
@@ -169,7 +171,7 @@ func maybeRequesterSideBurstPunch(logger *logging.Logger, contentID string, peer
 				)
 				continue
 			}
-			recordUDPBurstOutcome(contentID, peer.PeerID, profile, true, time.Now())
+			recordUDPBurstOutcome(contentID, peer.PeerID, profile, "probe", true, time.Now())
 			logger.Info("tracker_udp_requester_burst_probe_sent",
 				"contentId", contentID,
 				"peerId", peer.PeerID,
@@ -365,13 +367,20 @@ func learnedUDPBurstPhases(contentID string, peerID string, now time.Time) ([]p2
 	if !stats.LastSuccessAt.IsZero() && now.Sub(stats.LastSuccessAt) <= 30*time.Second {
 		return phasesForBurstProfile(stats.LastProfile), true
 	}
-	if stats.FailureCount >= 2 && !stats.LastFailureAt.IsZero() && now.Sub(stats.LastFailureAt) <= 20*time.Second && stats.LastProfile != "aggressive" {
-		return aggressiveUDPBurstPhases(), true
+	if stats.FailureCount >= 2 && !stats.LastFailureAt.IsZero() && now.Sub(stats.LastFailureAt) <= 20*time.Second {
+		switch nextUDPBurstProfileAfterFailure(stats) {
+		case "warm":
+			return warmUDPBurstPhases(), true
+		case "default":
+			return defaultUDPBurstPhases(), true
+		case "aggressive":
+			return aggressiveUDPBurstPhases(), true
+		}
 	}
 	return nil, false
 }
 
-func recordUDPBurstOutcome(contentID string, peerID string, profile string, success bool, now time.Time) {
+func recordUDPBurstOutcome(contentID string, peerID string, profile string, stage string, success bool, now time.Time) {
 	if strings.TrimSpace(contentID) == "" || strings.TrimSpace(peerID) == "" || strings.TrimSpace(profile) == "" {
 		return
 	}
@@ -383,9 +392,11 @@ func recordUDPBurstOutcome(contentID string, peerID string, profile string, succ
 	stats.LastProfile = profile
 	if success {
 		stats.LastSuccessAt = now
+		stats.LastSuccessStage = strings.TrimSpace(stage)
 		stats.FailureCount = 0
 	} else {
 		stats.LastFailureAt = now
+		stats.LastFailureStage = strings.TrimSpace(stage)
 		if previousProfile == profile {
 			stats.FailureCount++
 		} else {
@@ -434,6 +445,7 @@ func currentUDPBurstProfiles(contentID string, now time.Time) []core.UDPBurstPro
 		item := core.UDPBurstProfileStatus{
 			PeerID:       peerID,
 			Profile:      stats.LastProfile,
+			LastStage:    currentUDPBurstStage(stats),
 			FailureCount: stats.FailureCount,
 		}
 		if !stats.LastSuccessAt.IsZero() {
@@ -451,6 +463,34 @@ func currentUDPBurstProfiles(contentID string, now time.Time) []core.UDPBurstPro
 		return profiles[i].PeerID < profiles[j].PeerID
 	})
 	return profiles
+}
+
+func nextUDPBurstProfileAfterFailure(stats udpBurstProfileStats) string {
+	switch strings.TrimSpace(stats.LastFailureStage) {
+	case "piece":
+		switch strings.TrimSpace(stats.LastProfile) {
+		case "warm":
+			return "default"
+		case "default":
+			if stats.FailureCount >= 3 {
+				return "aggressive"
+			}
+			return "default"
+		default:
+			return "aggressive"
+		}
+	case "probe", "have":
+		return "aggressive"
+	default:
+		return "aggressive"
+	}
+}
+
+func currentUDPBurstStage(stats udpBurstProfileStats) string {
+	if stats.LastFailureAt.After(stats.LastSuccessAt) {
+		return strings.TrimSpace(stats.LastFailureStage)
+	}
+	return strings.TrimSpace(stats.LastSuccessStage)
 }
 
 func trackerBurstProfileNeedsAggressive(item tracker.UDPBurstProfileStatus, now time.Time) bool {
@@ -717,6 +757,7 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 			}
 		} else {
 			if err := probeClient.Probe(); err != nil {
+				recordUDPBurstOutcome(contentID, peerID, normalizedBurstProfile(burstProfile), "probe", false, time.Now())
 				udpProbes.Store(addr, false, now)
 				var cooldown time.Duration
 				if peerHealth != nil {
@@ -731,12 +772,14 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 				)
 				continue
 			}
+			recordUDPBurstOutcome(contentID, peerID, normalizedBurstProfile(burstProfile), "probe", true, time.Now())
 			udpProbes.Store(addr, true, now)
 			logger.Info("udp_peer_probe_ok", "contentId", contentID, "peer", peerID)
 		}
 		haveClient := p2pnet.NewUDPClient(addr, udpHaveTimeoutForProfile(burstProfile)).WithLocalAddr(selfUDPListenAddr)
 		haveRanges, err := haveClient.FetchHave(contentID)
 		if err != nil {
+			recordUDPBurstOutcome(contentID, peerID, normalizedBurstProfile(burstProfile), "have", false, time.Now())
 			var cooldown time.Duration
 			errorKind := udpDiscoveryErrorKind(err)
 			if peerHealth != nil {
@@ -751,6 +794,7 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 			)
 			continue
 		}
+		recordUDPBurstOutcome(contentID, peerID, normalizedBurstProfile(burstProfile), "have", true, time.Now())
 		if peerHealth != nil {
 			peerHealth.MarkSuccess(peerID)
 		}

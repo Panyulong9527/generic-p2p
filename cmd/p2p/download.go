@@ -148,6 +148,9 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 				_ = runtime.FinishDownload(pieceIndex)
 			}
 			if lastErr != nil {
+				if candidate.Transport == "udp" {
+					recordUDPBurstOutcome(manifest.ContentID, candidate.PeerID, normalizedBurstProfile(candidate.BurstProfile), "piece", false, time.Now())
+				}
 				errorKind := transferErrorKind(candidate, lastErr)
 				cooldown := peerHealth.MarkFailureKind(candidate.PeerID, errorKind, time.Now())
 				logger.Error("piece_download_failed",
@@ -170,6 +173,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 			usedCandidate = candidate
 			peerHealth.MarkSuccess(candidate.PeerID)
 			if candidate.Transport == "udp" {
+				recordUDPBurstOutcome(manifest.ContentID, candidate.PeerID, normalizedBurstProfile(candidate.BurstProfile), "piece", true, time.Now())
 				p2pnet.RememberRecentUDPSuccess(manifest.ContentID, candidate.Addr, time.Now())
 			}
 			break
@@ -285,6 +289,14 @@ func udpPieceTimeout(selected scheduler.PeerCandidate) time.Duration {
 	}
 }
 
+func normalizedBurstProfile(profile string) string {
+	profile = strings.TrimSpace(profile)
+	if profile == "" {
+		return "default"
+	}
+	return profile
+}
+
 func recordSelectionDecision(store *core.PieceStore, pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) {
 	runtime := store.RuntimeStats()
 	if runtime == nil {
@@ -325,7 +337,7 @@ func reportTrackerUDPBurstProfiles(logger *logging.Logger, discovery peerDiscove
 			continue
 		}
 		key := contentID + "|" + profile.PeerID
-		fingerprint := profile.Profile + "|" + profile.LastSuccessAt + "|" + profile.LastFailureAt + "|" + fmt.Sprintf("%d", profile.FailureCount)
+		fingerprint := profile.Profile + "|" + profile.LastStage + "|" + profile.LastSuccessAt + "|" + profile.LastFailureAt + "|" + fmt.Sprintf("%d", profile.FailureCount)
 		if !reportCache.ShouldReport(key, fingerprint) {
 			continue
 		}
@@ -338,7 +350,7 @@ func reportTrackerUDPBurstProfiles(logger *logging.Logger, discovery peerDiscove
 			lastOutcome = "success"
 			lastOutcomeAt = profile.LastSuccessAt
 		}
-		if err := client.ReportUDPBurstProfile(context.Background(), profile.PeerID, contentID, profile.Profile, lastOutcome, profile.FailureCount, lastOutcomeAt); err != nil {
+		if err := client.ReportUDPBurstProfile(context.Background(), profile.PeerID, contentID, profile.Profile, lastOutcome, profile.LastStage, profile.FailureCount, lastOutcomeAt); err != nil {
 			logger.Error("tracker_udp_burst_profile_report_failed",
 				"contentId", contentID,
 				"peerId", profile.PeerID,
