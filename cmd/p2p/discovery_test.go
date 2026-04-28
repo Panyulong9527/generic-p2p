@@ -369,6 +369,48 @@ func TestTrackerBurstProfileStageBiasPenalizesHaveFailuresLessThanProbeFailures(
 	}
 }
 
+func TestBuildTrackerUDPPeerBiasesIncludesUDPDecisionRiskBias(t *testing.T) {
+	now := time.Unix(770, 0)
+	status := tracker.StatusResponse{
+		UDPProbeResults: []tracker.UDPProbeResultStatus{
+			{TargetPeerID: "peer-low", LastFailureAt: now.Add(-5 * time.Second).Unix(), LastErrorKind: "udp_timeout"},
+			{TargetPeerID: "peer-stable", LastSuccessAt: now.Add(-4 * time.Second).Unix()},
+			{TargetPeerID: "peer-recover", LastFailureAt: now.Add(-6 * time.Second).Unix(), LastErrorKind: "udp_timeout"},
+		},
+		PeerTransferPaths: []tracker.PeerTransferPathStatus{
+			{TargetPeerID: "peer-low", ContentID: "sha256-demo", LastPath: "tcp", LastAt: now.Add(-3 * time.Second).Unix()},
+			{TargetPeerID: "peer-stable", ContentID: "sha256-demo", LastPath: "udp", LastAt: now.Add(-3 * time.Second).Unix()},
+			{TargetPeerID: "peer-recover", ContentID: "sha256-demo", LastPath: "udp", LastAt: now.Add(-3 * time.Second).Unix()},
+		},
+		UDPDecisions: []tracker.UDPDecisionStatus{
+			{TargetPeerID: "peer-low", ContentID: "sha256-demo", BurstProfile: "aggressive", LastStage: "probe", ReportCount: 3, LastReportedAt: now.Add(-2 * time.Second).Unix()},
+			{TargetPeerID: "peer-stable", ContentID: "sha256-demo", BurstProfile: "warm", LastStage: "piece", ReportCount: 2, LastReportedAt: now.Add(-2 * time.Second).Unix()},
+			{TargetPeerID: "peer-recover", ContentID: "sha256-demo", BurstProfile: "default", LastStage: "piece", ReportCount: 2, LastReportedAt: now.Add(-2 * time.Second).Unix()},
+		},
+		Swarms: []tracker.SwarmStatus{
+			{
+				ContentID: "sha256-demo",
+				Peers: []tracker.PeerRecord{
+					{PeerID: "peer-low", UDPAddrs: []string{"198.51.100.10:9003"}},
+					{PeerID: "peer-stable", UDPAddrs: []string{"198.51.100.11:9003"}},
+					{PeerID: "peer-recover", UDPAddrs: []string{"198.51.100.12:9003"}},
+				},
+			},
+		},
+	}
+
+	biases := buildTrackerUDPPeerBiases(status, "sha256-demo", now)
+	if got := biases["peer-low"]; math.Abs(got-(-0.68)) > 1e-9 {
+		t.Fatalf("expected peer-low combined bias -0.68, got %.2f", got)
+	}
+	if got := biases["peer-stable"]; math.Abs(got-0.39) > 1e-9 {
+		t.Fatalf("expected peer-stable combined bias 0.39, got %.2f", got)
+	}
+	if got := biases["peer-recover"]; math.Abs(got-(-0.10)) > 1e-9 {
+		t.Fatalf("expected peer-recover combined bias -0.10, got %.2f", got)
+	}
+}
+
 func TestRequesterSideBurstPunchTargetsPrefersObservedAndDeduplicates(t *testing.T) {
 	peer := tracker.PeerRecord{
 		PeerID:          "peer-a",

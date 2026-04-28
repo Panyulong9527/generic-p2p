@@ -1061,11 +1061,11 @@ const webAppHTML = `<!doctype html>
       if (drift && drift.label === "udp miss" && stage === "have") {
         return { kind: "warn", label: "watch udp" };
       }
-      if ((!drift || drift.label === "udp recovered") && stage === "piece") {
-        return { kind: "recovering", label: "udp recovering" };
-      }
       if ((!drift || drift.label !== "udp miss") && profile === "warm" && stage === "piece") {
         return { kind: "stable", label: "udp stable" };
+      }
+      if ((!drift || drift.label === "aligned" || drift.label === "udp recovered") && stage === "piece") {
+        return { kind: "recovering", label: "udp recovering" };
       }
       return { kind: "none", label: "" };
     }

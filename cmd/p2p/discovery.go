@@ -958,6 +958,13 @@ func buildTrackerUDPPeerBiases(status tracker.StatusResponse, contentID string, 
 		}
 		keepaliveResults[item.TargetPeerID] = item
 	}
+	udpDecisions := make(map[string]tracker.UDPDecisionStatus, len(status.UDPDecisions))
+	for _, item := range status.UDPDecisions {
+		if strings.TrimSpace(item.ContentID) != "" && item.ContentID != contentID {
+			continue
+		}
+		udpDecisions[item.TargetPeerID] = item
+	}
 	for _, swarm := range status.Swarms {
 		if swarm.ContentID != contentID {
 			continue
@@ -969,10 +976,56 @@ func buildTrackerUDPPeerBiases(status tracker.StatusResponse, contentID string, 
 			fallbackBias := trackerUDPFallbackBias(transferPaths[peer.PeerID], keepaliveResult, now)
 			_, _, _, burstProfile := trackerPeerUDPState(status, contentID, peer)
 			burstBias := trackerBurstProfileBias(burstProfile, now)
-			biases[peer.PeerID] += transferBias + keepaliveBias + fallbackBias + burstBias
+			decisionBias := trackerUDPDecisionBias(peer, probeResults[peer.PeerID], transferPaths[peer.PeerID], udpDecisions[peer.PeerID], now)
+			biases[peer.PeerID] += transferBias + keepaliveBias + fallbackBias + burstBias + decisionBias
 		}
 	}
 	return biases
+}
+
+func trackerUDPDecisionBias(peer tracker.PeerRecord, probeResult tracker.UDPProbeResultStatus, transferPath tracker.PeerTransferPathStatus, decision tracker.UDPDecisionStatus, now time.Time) float64 {
+	if strings.TrimSpace(decision.TargetPeerID) == "" || decision.LastReportedAt == 0 {
+		return 0
+	}
+	if now.Sub(time.Unix(decision.LastReportedAt, 0)) > 45*time.Second {
+		return 0
+	}
+	switch trackerUDPDecisionRiskKind(peer, probeResult, transferPath, decision) {
+	case "low":
+		return -0.22
+	case "warn":
+		return -0.10
+	case "recovering":
+		return 0.08
+	case "stable":
+		return 0.14
+	default:
+		return 0
+	}
+}
+
+func trackerUDPDecisionRiskKind(peer tracker.PeerRecord, probeResult tracker.UDPProbeResultStatus, transferPath tracker.PeerTransferPathStatus, decision tracker.UDPDecisionStatus) string {
+	if strings.TrimSpace(decision.BurstProfile) == "" {
+		return ""
+	}
+	advice := discoveryTrackerPeerRouteAdvice(peer, probeResult)
+	drift := discoveryTrackerRouteDrift(advice, transferPath.LastPath)
+	profile := strings.TrimSpace(decision.BurstProfile)
+	stage := strings.TrimSpace(decision.LastStage)
+
+	if drift == "udp_miss" && profile == "aggressive" && stage == "probe" && decision.ReportCount >= 2 {
+		return "low"
+	}
+	if drift == "udp_miss" && stage == "have" {
+		return "warn"
+	}
+	if drift != "udp_miss" && profile == "warm" && stage == "piece" {
+		return "stable"
+	}
+	if (drift == "-" || drift == "aligned" || drift == "udp_recovered") && stage == "piece" {
+		return "recovering"
+	}
+	return ""
 }
 
 func trackerUDPProbeBias(result tracker.UDPProbeResultStatus, now time.Time) float64 {
