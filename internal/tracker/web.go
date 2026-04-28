@@ -762,6 +762,7 @@ const webAppHTML = `<!doctype html>
       const peerTransferPaths = status.peerTransferPaths || [];
       const udpKeepaliveResults = status.udpKeepaliveResults || [];
       const udpBurstProfiles = status.udpBurstProfiles || [];
+      const udpDecisions = status.udpDecisions || [];
       const udpProbeResultMap = Object.fromEntries(
         udpProbeResults.map((item) => [item.targetPeerId || "", item])
       );
@@ -773,6 +774,9 @@ const webAppHTML = `<!doctype html>
       );
       const udpBurstProfileMap = Object.fromEntries(
         udpBurstProfiles.map((item) => [item.targetPeerId || "", item])
+      );
+      const udpDecisionMap = Object.fromEntries(
+        udpDecisions.map((item) => [item.targetPeerId || "", item])
       );
       const routeDriftSummary = summarizeRouteDrift(swarms, udpProbeResultMap, peerTransferPathMap);
       const fallbackSummary = summarizeFallbackActive(swarms, udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap);
@@ -790,7 +794,7 @@ const webAppHTML = `<!doctype html>
             '<br><span class="meta-inline">udp fallback active ' + swarmFallbackActive + '</span>' +
             formatSwarmOffenders(offenders) +
               '<div class="subsection">' +
-              renderSwarmPeers(swarm.peers || [], udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap, udpBurstProfileMap) +
+              renderSwarmPeers(swarm.peers || [], udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap, udpBurstProfileMap, udpDecisionMap) +
             '</div>' +
           '</div>'
             );
@@ -854,6 +858,22 @@ const webAppHTML = `<!doctype html>
             ).join("") +
           '</div>'
         : '';
+      const udpDecisionHTML = udpDecisions.length
+        ? '<div class="subsection">' +
+            '<h3>UDP Decisions</h3>' +
+            udpDecisions.map((item) =>
+              '<div class="swarm">' +
+                '<strong>' + escapeHTML(item.targetPeerId || "peer") + '</strong> ' + formatUDPDecisionChip(item) + '<br>' +
+                'budget ' + Number(item.udpBudget || 0) + ' / timeout ' + Number(item.udpTimeoutMs || 0) + ' ms' +
+                '<br>score ' + Number(item.selectedScore || 0).toFixed(2) +
+                '<br>reason ' + escapeHTML(item.reason || "-") +
+                '<br>reports ' + Number(item.reportCount || 0) +
+                '<br>content ' + escapeHTML(shortContentId(item.contentId || "-")) +
+                '<br>reported at ' + formatTimestamp(item.lastReportedAt) +
+              '</div>'
+            ).join("") +
+          '</div>'
+        : '';
 
       trackerStatusEl.innerHTML =
         '<div class="metric-row">' +
@@ -877,6 +897,11 @@ const webAppHTML = `<!doctype html>
           '<div class="metric"><strong>' + countBurstProfilesByName(udpBurstProfiles, "warm") + '</strong><span>warm burst</span></div>' +
         '</div>' +
         '<div class="metric-row">' +
+          '<div class="metric"><strong>' + udpDecisions.length + '</strong><span>udp decisions</span></div>' +
+          '<div class="metric"><strong>' + countUDPDecisionsByStage(udpDecisions, "piece") + '</strong><span>piece-tuned</span></div>' +
+          '<div class="metric"><strong>' + countUDPDecisionsByStage(udpDecisions, "probe") + '</strong><span>probe-limited</span></div>' +
+        '</div>' +
+        '<div class="metric-row">' +
           '<div class="metric"><strong>' + status.cleanupIntervalSeconds + 's</strong><span>cleanup interval</span></div>' +
           '<div class="metric"><strong>' + escapeHTML(status.statePath || "-") + '</strong><span>state file</span></div>' +
           '<div class="metric"><strong>' + peerTransferPaths.length + '</strong><span>tracked transfer peers</span></div>' +
@@ -895,6 +920,7 @@ const webAppHTML = `<!doctype html>
         udpResultHTML +
         udpKeepaliveHTML +
         udpBurstHTML +
+        udpDecisionHTML +
         swarmHTML;
     }
 
@@ -908,7 +934,7 @@ const webAppHTML = `<!doctype html>
       return peers.map((peer) => escapeHTML(peer.peerId || "peer")).join(", ");
     }
 
-    function renderSwarmPeers(peers, udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap, udpBurstProfileMap) {
+    function renderSwarmPeers(peers, udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap, udpBurstProfileMap, udpDecisionMap) {
       if (!peers.length) return '<div class="empty">No peers</div>';
       return peers.map((peer) => {
         const result = udpProbeResultMap[peer.peerId || ""] || null;
@@ -916,8 +942,9 @@ const webAppHTML = `<!doctype html>
         const route = peerRouteAdvice(peer, result);
         const fallback = peerFallbackState(peer, route, transfer, udpKeepaliveResultMap);
         const burstProfile = udpBurstProfileMap[peer.peerId || ""] || null;
+        const decision = udpDecisionMap[peer.peerId || ""] || null;
         return '<div class="swarm">' +
-          '<strong>' + escapeHTML(peer.peerId || "peer") + '</strong> ' + formatProbeResultChip(result) + ' ' + formatRouteChip(route) + ' ' + formatRouteDriftChip(route, transfer) + ' ' + formatFallbackChip(fallback) + ' ' + formatBurstProfileChip(burstProfile) + '<br>' +
+          '<strong>' + escapeHTML(peer.peerId || "peer") + '</strong> ' + formatProbeResultChip(result) + ' ' + formatRouteChip(route) + ' ' + formatRouteDriftChip(route, transfer) + ' ' + formatFallbackChip(fallback) + ' ' + formatBurstProfileChip(burstProfile) + ' ' + formatUDPDecisionChip(decision) + '<br>' +
           'actual ' + formatActualPathChip(transfer) + pathTotalsSuffix(transfer) +
           'udp ' + escapeHTML((peer.udpAddrs || []).join(",") || "-") +
           '<br>observed ' + escapeHTML(peer.observedUdpAddr || "-") +
@@ -984,6 +1011,33 @@ const webAppHTML = `<!doctype html>
 
     function countBurstProfilesByName(items, profile) {
       return (items || []).filter((item) => String(item.profile || "") === profile).length;
+    }
+
+    function formatUDPDecisionChip(item) {
+      if (!item || !item.burstProfile) {
+        return '';
+      }
+      const profile = String(item.burstProfile || '');
+      const stage = String(item.lastStage || '').trim();
+      let label = 'decision ' + profile;
+      if (stage) {
+        label += ' / ' + stage;
+      }
+      label += ' / b' + Number(item.udpBudget || 0);
+      if (Number(item.udpTimeoutMs || 0) > 0) {
+        label += ' / t' + Number(item.udpTimeoutMs || 0) + 'ms';
+      }
+      if (profile === 'aggressive') {
+        return '<span class="chip chip-fail">' + escapeHTML(label) + '</span>';
+      }
+      if (profile === 'warm') {
+        return '<span class="chip chip-ok">' + escapeHTML(label) + '</span>';
+      }
+      return '<span class="chip chip-info">' + escapeHTML(label) + '</span>';
+    }
+
+    function countUDPDecisionsByStage(items, stage) {
+      return (items || []).filter((item) => String(item.lastStage || "") === stage).length;
     }
 
     function formatRouteChip(advice) {
