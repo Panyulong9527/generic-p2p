@@ -19,6 +19,7 @@ type udpPeerPreference struct {
 	observedAt   time.Time
 	trackerBias  float64
 	burstProfile string
+	decisionRisk string
 }
 
 type udpBurstProfileStats struct {
@@ -85,7 +86,8 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 	preferences := make(map[string]udpPeerPreference)
 	for _, peer := range peers {
 		now := time.Now()
-		_, _, _, burstProfile := trackerPeerUDPState(status, contentID, peer)
+		probeResult, transferPath, _, burstProfile := trackerPeerUDPState(status, contentID, peer)
+		decisionRisk := trackerUDPDecisionRiskKind(peer, probeResult, transferPath, trackerPeerUDPDecision(status, contentID, peer))
 		probeRequestKey := contentID + "|" + selfPeerID + "|" + selfUDPListenAddr + "|" + peer.PeerID
 		if selfPeerID != "" && selfUDPListenAddr != "" && peer.PeerID != "" && peer.PeerID != selfPeerID && udpProbeRequests.ShouldRequest(probeRequestKey, now) {
 			if err := client.RequestUDPProbe(context.Background(), contentID, selfPeerID, selfUDPListenAddr, peer.PeerID); err != nil {
@@ -110,6 +112,7 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 			pref.observedAt = seenAt
 			pref.trackerBias = maxFloat64(pref.trackerBias, probeBiases[peer.PeerID])
 			pref.burstProfile = strings.TrimSpace(burstProfile.Profile)
+			pref.decisionRisk = decisionRisk
 			preferences[observedAddr] = pref
 			maybeKeepAliveUDPPath(logger, contentID, peer.PeerID, trackerURL, selfUDPListenAddr, observedAddr, now)
 		}
@@ -127,6 +130,7 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 			pref := preferences[addr]
 			pref.trackerBias = maxFloat64(pref.trackerBias, probeBiases[peer.PeerID])
 			pref.burstProfile = strings.TrimSpace(burstProfile.Profile)
+			pref.decisionRisk = decisionRisk
 			preferences[addr] = pref
 		}
 		if peer.ObservedUDPAddr != "" && peer.ObservedUDPAddr != selfUDPListenAddr {
@@ -140,6 +144,7 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 			pref := preferences[peer.ObservedUDPAddr]
 			pref.trackerBias = maxFloat64(pref.trackerBias, probeBiases[peer.PeerID])
 			pref.burstProfile = strings.TrimSpace(burstProfile.Profile)
+			pref.decisionRisk = decisionRisk
 			preferences[peer.ObservedUDPAddr] = pref
 			maybeKeepAliveUDPPath(logger, contentID, peer.PeerID, trackerURL, selfUDPListenAddr, peer.ObservedUDPAddr, now)
 		}
@@ -346,6 +351,19 @@ func trackerPeerUDPState(status tracker.StatusResponse, contentID string, peer t
 		break
 	}
 	return probeResult, transferPath, peerKeepaliveResult(peer, keepaliveResults), burstProfile
+}
+
+func trackerPeerUDPDecision(status tracker.StatusResponse, contentID string, peer tracker.PeerRecord) tracker.UDPDecisionStatus {
+	for _, item := range status.UDPDecisions {
+		if item.TargetPeerID != peer.PeerID {
+			continue
+		}
+		if strings.TrimSpace(item.ContentID) != "" && item.ContentID != contentID {
+			continue
+		}
+		return item
+	}
+	return tracker.UDPDecisionStatus{}
 }
 
 func udpBurstProfileName(phases []p2pnet.UDPBurstPhase) string {
@@ -830,13 +848,14 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 		}
 		logger.Info("udp_peer_have_received", "contentId", contentID, "peer", peerID, "ranges", haveRanges)
 		candidates = append(candidates, scheduler.PeerCandidate{
-			PeerID:       peerID,
-			Addr:         addr,
-			Transport:    "udp",
-			IsLAN:        isLANAddr(addr),
-			Score:        udpCandidateScore(addr, udpPreferences, time.Now()),
-			BurstProfile: burstProfile,
-			HaveRanges:   haveRanges,
+			PeerID:          peerID,
+			Addr:            addr,
+			Transport:       "udp",
+			IsLAN:           isLANAddr(addr),
+			Score:           udpCandidateScore(addr, udpPreferences, time.Now()),
+			BurstProfile:    burstProfile,
+			UDPDecisionRisk: strings.TrimSpace(udpPreferences[addr].decisionRisk),
+			HaveRanges:      haveRanges,
 		})
 	}
 	if len(candidates) == 0 {

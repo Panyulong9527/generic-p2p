@@ -98,6 +98,30 @@ func TestPieceAttemptCandidatesAllowsMoreAlternativesForAggressiveBurstProfile(t
 	}
 }
 
+func TestPieceAttemptCandidatesPrefersLowerRiskUDPAlternativesOnEqualScore(t *testing.T) {
+	selected := scheduler.PeerCandidate{
+		PeerID:       "udp://selected-risk",
+		Transport:    "udp",
+		BurstProfile: "default",
+		Score:        1.4,
+		HaveRanges:   []core.HaveRange{{Start: 0, End: 5}},
+	}
+	peers := []scheduler.PeerCandidate{
+		selected,
+		{PeerID: "udp://alt-low", Transport: "udp", Score: 1.3, UDPDecisionRisk: "low", HaveRanges: []core.HaveRange{{Start: 0, End: 5}}},
+		{PeerID: "udp://alt-stable", Transport: "udp", Score: 1.3, UDPDecisionRisk: "stable", HaveRanges: []core.HaveRange{{Start: 0, End: 5}}},
+		{PeerID: "udp://alt-warn", Transport: "udp", Score: 1.3, UDPDecisionRisk: "warn", HaveRanges: []core.HaveRange{{Start: 0, End: 5}}},
+	}
+
+	attempts := pieceAttemptCandidates("", 2, selected, peers)
+	if len(attempts) != 3 {
+		t.Fatalf("expected selected plus two alternatives, got %+v", attempts)
+	}
+	if attempts[1].PeerID != "udp://alt-stable" || attempts[2].PeerID != "udp://alt-warn" {
+		t.Fatalf("expected lower risk alternatives first, got %+v", attempts)
+	}
+}
+
 func TestUDPAttemptBudgetVariesByBurstProfile(t *testing.T) {
 	if got := udpAttemptBudget("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "warm"}); got != 2 {
 		t.Fatalf("expected warm budget 2, got %d", got)
@@ -124,6 +148,18 @@ func TestUDPAttemptBudgetAdjustsByLastStage(t *testing.T) {
 	}
 }
 
+func TestUDPAttemptBudgetAdjustsByDecisionRisk(t *testing.T) {
+	if got := udpAttemptBudget("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "aggressive", UDPDecisionRisk: "low"}); got != 2 {
+		t.Fatalf("expected low-risk penalty to shrink aggressive budget to 2, got %d", got)
+	}
+	if got := udpAttemptBudget("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "default", UDPDecisionRisk: "warn"}); got != 2 {
+		t.Fatalf("expected watch-risk penalty to shrink default budget to 2, got %d", got)
+	}
+	if got := udpAttemptBudget("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "warm", UDPDecisionRisk: "stable"}); got != 3 {
+		t.Fatalf("expected stable risk to widen warm budget to 3, got %d", got)
+	}
+}
+
 func TestUDPPieceTimeoutVariesByBurstProfile(t *testing.T) {
 	if got := udpPieceTimeout("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "warm"}); got != 3500*time.Millisecond {
 		t.Fatalf("expected warm timeout 3.5s, got %s", got)
@@ -147,5 +183,17 @@ func TestUDPPieceTimeoutAdjustsByLastStage(t *testing.T) {
 	}
 	if got := udpPieceTimeout(contentID, scheduler.PeerCandidate{Transport: "udp", PeerID: "udp://piece-timeout-peer", BurstProfile: "default"}); got != 5700*time.Millisecond {
 		t.Fatalf("expected piece-stage timeout to widen to 5.7s, got %s", got)
+	}
+}
+
+func TestUDPPieceTimeoutAdjustsByDecisionRisk(t *testing.T) {
+	if got := udpPieceTimeout("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "aggressive", UDPDecisionRisk: "low"}); got != 4300*time.Millisecond {
+		t.Fatalf("expected low-risk penalty to tighten aggressive timeout to 4.3s, got %s", got)
+	}
+	if got := udpPieceTimeout("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "default", UDPDecisionRisk: "warn"}); got != 3900*time.Millisecond {
+		t.Fatalf("expected watch-risk penalty to tighten default timeout to 3.9s, got %s", got)
+	}
+	if got := udpPieceTimeout("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "warm", UDPDecisionRisk: "stable"}); got != 4400*time.Millisecond {
+		t.Fatalf("expected stable risk to widen warm timeout to 4.4s, got %s", got)
 	}
 }

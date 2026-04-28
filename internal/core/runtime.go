@@ -46,18 +46,19 @@ type ActiveDownload struct {
 }
 
 type SelectionDecision struct {
-	PieceIndex           int     `json:"pieceIndex"`
-	SelectedPeerID       string  `json:"selectedPeerId"`
-	SelectedTransport    string  `json:"selectedTransport"`
-	SelectedScore        float64 `json:"selectedScore"`
-	SelectedBurstProfile string  `json:"selectedBurstProfile,omitempty"`
-	SelectedLastStage    string  `json:"selectedLastStage,omitempty"`
-	SelectedUDPBudget    int     `json:"selectedUdpBudget,omitempty"`
-	SelectedUDPTimeoutMs int64   `json:"selectedUdpTimeoutMs,omitempty"`
-	TopUDPPeerID         string  `json:"topUdpPeerId,omitempty"`
-	TopUDPScore          float64 `json:"topUdpScore,omitempty"`
-	Reason               string  `json:"reason"`
-	RecordedAt           string  `json:"recordedAt"`
+	PieceIndex              int     `json:"pieceIndex"`
+	SelectedPeerID          string  `json:"selectedPeerId"`
+	SelectedTransport       string  `json:"selectedTransport"`
+	SelectedScore           float64 `json:"selectedScore"`
+	SelectedBurstProfile    string  `json:"selectedBurstProfile,omitempty"`
+	SelectedLastStage       string  `json:"selectedLastStage,omitempty"`
+	SelectedUDPDecisionRisk string  `json:"selectedUdpDecisionRisk,omitempty"`
+	SelectedUDPBudget       int     `json:"selectedUdpBudget,omitempty"`
+	SelectedUDPTimeoutMs    int64   `json:"selectedUdpTimeoutMs,omitempty"`
+	TopUDPPeerID            string  `json:"topUdpPeerId,omitempty"`
+	TopUDPScore             float64 `json:"topUdpScore,omitempty"`
+	Reason                  string  `json:"reason"`
+	RecordedAt              string  `json:"recordedAt"`
 }
 
 type UDPBurstProfileStatus struct {

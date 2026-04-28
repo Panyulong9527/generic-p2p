@@ -3,14 +3,15 @@ package scheduler
 import "generic-p2p/internal/core"
 
 type PeerCandidate struct {
-	PeerID       string
-	Addr         string
-	Transport    string
-	IsLAN        bool
-	Score        float64
-	BurstProfile string
-	HaveRanges   []core.HaveRange
-	PendingCount int
+	PeerID          string
+	Addr            string
+	Transport       string
+	IsLAN           bool
+	Score           float64
+	BurstProfile    string
+	UDPDecisionRisk string
+	HaveRanges      []core.HaveRange
+	PendingCount    int
 }
 
 type Scheduler struct{}

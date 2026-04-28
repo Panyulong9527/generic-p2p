@@ -254,6 +254,9 @@ func pieceAttemptCandidates(contentID string, pieceIndex int, selected scheduler
 		if alternatives[i].Score != alternatives[j].Score {
 			return alternatives[i].Score > alternatives[j].Score
 		}
+		if udpDecisionRiskPriority(alternatives[i].UDPDecisionRisk) != udpDecisionRiskPriority(alternatives[j].UDPDecisionRisk) {
+			return udpDecisionRiskPriority(alternatives[i].UDPDecisionRisk) < udpDecisionRiskPriority(alternatives[j].UDPDecisionRisk)
+		}
 		if alternatives[i].PendingCount != alternatives[j].PendingCount {
 			return alternatives[i].PendingCount < alternatives[j].PendingCount
 		}
@@ -272,7 +275,8 @@ func pieceAttemptCandidates(contentID string, pieceIndex int, selected scheduler
 func udpAttemptBudget(contentID string, selected scheduler.PeerCandidate) int {
 	base := udpAttemptBudgetForProfile(selected.BurstProfile)
 	stage := currentUDPBurstStageForPeer(contentID, selected.PeerID, time.Now())
-	return stageAdjustedUDPAttemptBudget(base, stage)
+	base = stageAdjustedUDPAttemptBudget(base, stage)
+	return decisionRiskAdjustedUDPAttemptBudget(base, selected.UDPDecisionRisk)
 }
 
 func udpAttemptBudgetForProfile(profile string) int {
@@ -305,6 +309,33 @@ func stageAdjustedUDPAttemptBudget(base int, stage string) int {
 	}
 }
 
+func decisionRiskAdjustedUDPAttemptBudget(base int, risk string) int {
+	switch strings.TrimSpace(risk) {
+	case "low":
+		if base > 2 {
+			return base - 2
+		}
+		return 1
+	case "warn":
+		if base > 1 {
+			return base - 1
+		}
+		return 1
+	case "recovering":
+		if base < 5 {
+			return base + 1
+		}
+		return 5
+	case "stable":
+		if base < 5 {
+			return base + 1
+		}
+		return 5
+	default:
+		return base
+	}
+}
+
 func currentUDPBurstStageForPeer(contentID string, peerID string, now time.Time) string {
 	stats, ok := udpBurstStats(contentID, peerID, now)
 	if !ok {
@@ -316,7 +347,8 @@ func currentUDPBurstStageForPeer(contentID string, peerID string, now time.Time)
 func udpPieceTimeout(contentID string, selected scheduler.PeerCandidate) time.Duration {
 	base := udpPieceTimeoutForProfile(selected.BurstProfile)
 	stage := currentUDPBurstStageForPeer(contentID, selected.PeerID, time.Now())
-	return stageAdjustedUDPPieceTimeout(base, stage)
+	base = stageAdjustedUDPPieceTimeout(base, stage)
+	return decisionRiskAdjustedUDPPieceTimeout(base, selected.UDPDecisionRisk)
 }
 
 func udpPieceTimeoutForProfile(profile string) time.Duration {
@@ -346,6 +378,28 @@ func stageAdjustedUDPPieceTimeout(base time.Duration, stage string) time.Duratio
 	}
 }
 
+func decisionRiskAdjustedUDPPieceTimeout(base time.Duration, risk string) time.Duration {
+	switch strings.TrimSpace(risk) {
+	case "low":
+		return clampUDPPieceTimeout(base-1200*time.Millisecond, 2200*time.Millisecond)
+	case "warn":
+		return clampUDPPieceTimeout(base-600*time.Millisecond, 2200*time.Millisecond)
+	case "recovering":
+		return base + 600*time.Millisecond
+	case "stable":
+		return base + 900*time.Millisecond
+	default:
+		return base
+	}
+}
+
+func clampUDPPieceTimeout(timeout time.Duration, min time.Duration) time.Duration {
+	if timeout < min {
+		return min
+	}
+	return timeout
+}
+
 func normalizedBurstProfile(profile string) string {
 	profile = strings.TrimSpace(profile)
 	if profile == "" {
@@ -358,14 +412,15 @@ func recordSelectionDecision(store *core.PieceStore, pieceIndex int, selected sc
 	runtime := store.RuntimeStats()
 	contentID := store.Manifest().ContentID
 	decision := core.SelectionDecision{
-		PieceIndex:           pieceIndex,
-		SelectedPeerID:       selected.PeerID,
-		SelectedTransport:    selected.Transport,
-		SelectedScore:        selected.Score,
-		SelectedBurstProfile: normalizedBurstProfile(selected.BurstProfile),
-		SelectedLastStage:    currentUDPBurstStageForPeer(contentID, selected.PeerID, time.Now()),
-		Reason:               selectionReason(pieceIndex, selected, peerCandidates),
-		RecordedAt:           time.Now().Format(time.RFC3339),
+		PieceIndex:              pieceIndex,
+		SelectedPeerID:          selected.PeerID,
+		SelectedTransport:       selected.Transport,
+		SelectedScore:           selected.Score,
+		SelectedBurstProfile:    normalizedBurstProfile(selected.BurstProfile),
+		SelectedLastStage:       currentUDPBurstStageForPeer(contentID, selected.PeerID, time.Now()),
+		SelectedUDPDecisionRisk: strings.TrimSpace(selected.UDPDecisionRisk),
+		Reason:                  selectionReason(pieceIndex, selected, peerCandidates),
+		RecordedAt:              time.Now().Format(time.RFC3339),
 	}
 	if selected.Transport == "udp" {
 		decision.SelectedUDPBudget = udpAttemptBudget(contentID, selected)
@@ -448,9 +503,25 @@ func reportTrackerUDPDecision(logger *logging.Logger, discovery peerDiscoveryOpt
 
 func selectionReason(pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) string {
 	if selected.Transport == "udp" {
+		switch strings.TrimSpace(selected.UDPDecisionRisk) {
+		case "low":
+			return "selected_udp_despite_low_value_risk"
+		case "warn":
+			return "selected_udp_under_watch_risk"
+		case "recovering":
+			return "selected_udp_recovering_path"
+		case "stable":
+			return "selected_udp_stable_path"
+		}
 		return "selected_udp_best_score"
 	}
 	if topUDP, ok := topUDPCandidateForPiece(pieceIndex, peerCandidates); ok {
+		switch strings.TrimSpace(topUDP.UDPDecisionRisk) {
+		case "low":
+			return "selected_tcp_over_low_value_udp"
+		case "warn":
+			return "selected_tcp_over_watch_udp"
+		}
 		if topUDP.Score < selected.Score {
 			return "selected_tcp_over_lower_udp_score"
 		}
@@ -477,6 +548,23 @@ func topUDPCandidateForPiece(pieceIndex int, peerCandidates []scheduler.PeerCand
 		}
 	}
 	return best, ok
+}
+
+func udpDecisionRiskPriority(risk string) int {
+	switch strings.TrimSpace(risk) {
+	case "stable":
+		return 0
+	case "recovering":
+		return 1
+	case "":
+		return 2
+	case "warn":
+		return 3
+	case "low":
+		return 4
+	default:
+		return 2
+	}
 }
 
 func reportTrackerTransferPath(logger *logging.Logger, discovery peerDiscoveryOptions, contentID string, candidate scheduler.PeerCandidate) {
