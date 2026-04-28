@@ -380,6 +380,23 @@ func TestUDPClientFetchPieceRetransmitsMissingChunks(t *testing.T) {
 	}
 }
 
+func TestNextUDPPieceChunkBatchUsesWindowedMissingChunks(t *testing.T) {
+	chunks := map[int][]byte{
+		0: []byte("a"),
+		3: []byte("d"),
+	}
+	got := nextUDPPieceChunkBatch(chunks, 6, 2)
+	want := []int{1, 2}
+	if len(got) != len(want) {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("expected %v, got %v", want, got)
+		}
+	}
+}
+
 func freeUDPAddr(t *testing.T) string {
 	t.Helper()
 

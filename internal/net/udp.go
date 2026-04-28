@@ -27,6 +27,7 @@ const (
 
 	udpMaxDatagramBytes = 4096
 	udpChunkDataBytes   = 900
+	udpPieceChunkWindow = 4
 )
 
 type UDPMessage struct {
@@ -692,7 +693,7 @@ func (c *UDPClient) FetchPiece(contentID string, pieceIndex int) ([]byte, error)
 	}
 	defer conn.Close()
 
-	if err := writeUDPPieceRequest(conn, remote, requestID, contentID, pieceIndex, nil); err != nil {
+	if err := writeUDPPieceRequest(conn, remote, requestID, contentID, pieceIndex, []int{0}); err != nil {
 		return nil, err
 	}
 
@@ -731,7 +732,7 @@ func (c *UDPClient) fetchPieceWithSharedSocket(remote *net.UDPAddr, requestID st
 	}
 	msgCh, release := socket.register(requestID)
 	defer release()
-	if err := writeUDPPieceRequest(socket.conn, remote, requestID, contentID, pieceIndex, nil); err != nil {
+	if err := writeUDPPieceRequest(socket.conn, remote, requestID, contentID, pieceIndex, []int{0}); err != nil {
 		return nil, err
 	}
 	return c.collectPieceChunksWithSharedSocket(socket.conn, remote, msgCh, requestID, contentID, pieceIndex)
@@ -740,7 +741,7 @@ func (c *UDPClient) fetchPieceWithSharedSocket(remote *net.UDPAddr, requestID st
 func (c *UDPClient) collectPieceChunksWithConn(conn *net.UDPConn, remote *net.UDPAddr, requestID string, contentID string, pieceIndex int, buffer []byte) ([]byte, error) {
 	chunks := make(map[int][]byte)
 	totalChunks := -1
-	for round := 0; round < 3; round++ {
+	for round := 0; round < 6; round++ {
 		deadline := time.Now().Add(c.Timeout)
 		for {
 			if totalChunks >= 0 && len(chunks) == totalChunks {
@@ -778,13 +779,16 @@ func (c *UDPClient) collectPieceChunksWithConn(conn *net.UDPConn, remote *net.UD
 			return joinUDPChunks(chunks, totalChunks), nil
 		}
 		if totalChunks <= 0 {
+			if err := writeUDPPieceRequest(conn, remote, requestID, contentID, pieceIndex, []int{0}); err != nil {
+				return nil, err
+			}
 			continue
 		}
-		missing := missingUDPPieceChunks(chunks, totalChunks)
-		if len(missing) == 0 {
+		nextBatch := nextUDPPieceChunkBatch(chunks, totalChunks, udpPieceChunkWindow)
+		if len(nextBatch) == 0 {
 			return joinUDPChunks(chunks, totalChunks), nil
 		}
-		if err := writeUDPPieceRequest(conn, remote, requestID, contentID, pieceIndex, missing); err != nil {
+		if err := writeUDPPieceRequest(conn, remote, requestID, contentID, pieceIndex, nextBatch); err != nil {
 			return nil, err
 		}
 	}
@@ -798,7 +802,7 @@ func (c *UDPClient) collectPieceChunksWithConn(conn *net.UDPConn, remote *net.UD
 func (c *UDPClient) collectPieceChunksWithSharedSocket(conn *net.UDPConn, remote *net.UDPAddr, msgCh <-chan UDPMessage, requestID string, contentID string, pieceIndex int) ([]byte, error) {
 	chunks := make(map[int][]byte)
 	totalChunks := -1
-	for round := 0; round < 3; round++ {
+	for round := 0; round < 6; round++ {
 		deadline := time.NewTimer(c.Timeout)
 		timedOut := false
 		for !timedOut {
@@ -826,13 +830,16 @@ func (c *UDPClient) collectPieceChunksWithSharedSocket(conn *net.UDPConn, remote
 			return joinUDPChunks(chunks, totalChunks), nil
 		}
 		if totalChunks <= 0 {
+			if err := writeUDPPieceRequest(conn, remote, requestID, contentID, pieceIndex, []int{0}); err != nil {
+				return nil, err
+			}
 			continue
 		}
-		missing := missingUDPPieceChunks(chunks, totalChunks)
-		if len(missing) == 0 {
+		nextBatch := nextUDPPieceChunkBatch(chunks, totalChunks, udpPieceChunkWindow)
+		if len(nextBatch) == 0 {
 			return joinUDPChunks(chunks, totalChunks), nil
 		}
-		if err := writeUDPPieceRequest(conn, remote, requestID, contentID, pieceIndex, missing); err != nil {
+		if err := writeUDPPieceRequest(conn, remote, requestID, contentID, pieceIndex, nextBatch); err != nil {
 			return nil, err
 		}
 	}
@@ -888,6 +895,17 @@ func missingUDPPieceChunks(chunks map[int][]byte, totalChunks int) []int {
 		missing = append(missing, i)
 	}
 	return missing
+}
+
+func nextUDPPieceChunkBatch(chunks map[int][]byte, totalChunks int, window int) []int {
+	missing := missingUDPPieceChunks(chunks, totalChunks)
+	if len(missing) == 0 {
+		return nil
+	}
+	if window <= 0 || len(missing) <= window {
+		return missing
+	}
+	return append([]int(nil), missing[:window]...)
 }
 
 func udpRequestedChunkIndexes(req UDPPieceRequest, totalChunks int) []int {
