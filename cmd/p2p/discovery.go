@@ -892,7 +892,7 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 			Addr:            addr,
 			Transport:       "udp",
 			IsLAN:           isLANAddr(addr),
-			Score:           udpCandidateScore(addr, udpPreferences, time.Now()),
+			Score:           udpCandidateScore(contentID, addr, udpPreferences, time.Now()),
 			BurstProfile:    burstProfile,
 			UDPDecisionRisk: strings.TrimSpace(udpPreferences[addr].decisionRisk),
 			UDPPublicMapped: strings.TrimSpace(udpPreferences[addr].source) == "stun",
@@ -915,7 +915,7 @@ func udpDiscoveryErrorKind(err error) string {
 	return "generic"
 }
 
-func udpCandidateScore(addr string, udpPreferences map[string]udpPeerPreference, now time.Time) float64 {
+func udpCandidateScore(contentID string, addr string, udpPreferences map[string]udpPeerPreference, now time.Time) float64 {
 	score := 1.2
 	preference, ok := udpPreferences[addr]
 	if !ok {
@@ -935,7 +935,37 @@ func udpCandidateScore(addr string, udpPreferences map[string]udpPeerPreference,
 		score = udpCandidateBaseScoreBySource(preference.source)
 	}
 	score += preference.trackerBias
+	score += udpChunkProgressDiscoveryBias(contentID, "udp://"+addr, now)
 	return score
+}
+
+func udpChunkProgressDiscoveryBias(contentID string, peerID string, now time.Time) float64 {
+	if smoothed, ok := smoothedUDPChunkProgress(contentID, peerID, now); ok {
+		switch {
+		case smoothed.Samples >= 2 && smoothed.CompleteRate >= 0.7 && smoothed.ReceiveRatio >= 0.85 && smoothed.DurationMs <= 900:
+			return 0.12
+		case smoothed.Samples >= 2 && smoothed.CompleteRate >= 0.5 && smoothed.ReceiveRatio >= 0.7:
+			return 0.06
+		case smoothed.Samples >= 2 && smoothed.ReceiveRatio < 0.35:
+			return -0.12
+		case smoothed.Samples >= 2 && smoothed.ReceiveRatio < 0.55:
+			return -0.06
+		}
+	}
+	sample, ok := recentUDPChunkProgress(contentID, peerID, now)
+	if !ok {
+		return 0
+	}
+	switch {
+	case sample.Completed && sample.Duration <= 900*time.Millisecond && udpChunkReceiveRatio(sample) >= 0.9:
+		return 0.06
+	case sample.RequestedChunks > 0 && sample.ReceivedChunks == 0:
+		return -0.10
+	case sample.RequestedChunks > 0 && udpChunkReceiveRatio(sample) < 0.5:
+		return -0.05
+	default:
+		return 0
+	}
 }
 
 func udpCandidateBaseScoreBySource(source string) float64 {
