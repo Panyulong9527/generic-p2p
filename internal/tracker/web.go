@@ -903,6 +903,11 @@ const webAppHTML = `<!doctype html>
           '<div class="metric"><strong>' + countUDPDecisionsByStage(udpDecisions, "probe") + '</strong><span>probe-limited</span></div>' +
         '</div>' +
         '<div class="metric-row">' +
+          '<div class="metric"><strong>' + countObservedUDPSource(swarms, "stun") + '</strong><span>public mapped peers</span></div>' +
+          '<div class="metric"><strong>' + countObservedUDPSource(swarms, "tracker") + '</strong><span>tracker observed peers</span></div>' +
+          '<div class="metric"><strong>' + countObservedUDPPeers(swarms) + '</strong><span>observed udp peers</span></div>' +
+        '</div>' +
+        '<div class="metric-row">' +
           '<div class="metric"><strong>' + udpDecisionRiskSummary.lowValue + '</strong><span>low-value udp targets</span></div>' +
           '<div class="metric"><strong>' + udpDecisionRiskSummary.recovering + '</strong><span>recovering udp targets</span></div>' +
           '<div class="metric"><strong>' + udpDecisionRiskSummary.stable + '</strong><span>stable udp targets</span></div>' +
@@ -951,7 +956,7 @@ const webAppHTML = `<!doctype html>
         const decision = udpDecisionMap[peer.peerId || ""] || null;
         const decisionRisk = classifyUDPDecisionRisk(route, transfer, decision);
         return '<div class="swarm">' +
-          '<strong>' + escapeHTML(peer.peerId || "peer") + '</strong> ' + formatProbeResultChip(result) + ' ' + formatRouteChip(route) + ' ' + formatRouteDriftChip(route, transfer) + ' ' + formatFallbackChip(fallback) + ' ' + formatBurstProfileChip(burstProfile) + ' ' + formatUDPDecisionChip(decision) + ' ' + formatUDPDecisionRiskChip(decisionRisk) + '<br>' +
+          '<strong>' + escapeHTML(peer.peerId || "peer") + '</strong> ' + formatProbeResultChip(result) + ' ' + formatRouteChip(route) + ' ' + formatObservedUDPSourceChip(peer) + ' ' + formatRouteDriftChip(route, transfer) + ' ' + formatFallbackChip(fallback) + ' ' + formatBurstProfileChip(burstProfile) + ' ' + formatUDPDecisionChip(decision) + ' ' + formatUDPDecisionRiskChip(decisionRisk) + '<br>' +
           'actual ' + formatActualPathChip(transfer) + pathTotalsSuffix(transfer) +
           'udp ' + escapeHTML((peer.udpAddrs || []).join(",") || "-") +
           '<br>observed ' + escapeHTML(peer.observedUdpAddr || "-") + ' <span class="meta-inline">source ' + escapeHTML(peer.observedUdpSource || "tracker") + '</span>' +
@@ -1148,12 +1153,15 @@ const webAppHTML = `<!doctype html>
       const udpAddrs = peer && Array.isArray(peer.udpAddrs) ? peer.udpAddrs.filter(Boolean) : [];
       const hasObservedUDP = Boolean(peer && peer.observedUdpAddr);
       const hasUDPPath = udpAddrs.length > 0 || hasObservedUDP;
+      const observedSource = String((peer && peer.observedUdpSource) || "").trim();
       if (!hasUDPPath) {
         return { className: "chip-route-none", label: "tcp only" };
       }
       if (!result) {
         return hasObservedUDP
-          ? { className: "chip-route-udp", label: "prefer udp" }
+          ? (observedSource === "stun"
+            ? { className: "chip-route-udp", label: "prefer udp+" }
+            : { className: "chip-route-udp", label: "prefer udp" })
           : { className: "chip-route-mixed", label: "try udp" };
       }
 
@@ -1170,8 +1178,43 @@ const webAppHTML = `<!doctype html>
         return { className: "chip-route-tcp", label: "prefer tcp" };
       }
       return hasObservedUDP
-        ? { className: "chip-route-udp", label: "prefer udp" }
+        ? (observedSource === "stun"
+          ? { className: "chip-route-udp", label: "prefer udp+" }
+          : { className: "chip-route-udp", label: "prefer udp" })
         : { className: "chip-route-mixed", label: "try udp" };
+    }
+
+    function formatObservedUDPSourceChip(peer) {
+      const observed = String((peer && peer.observedUdpAddr) || "").trim();
+      if (!observed) {
+        return '<span class="chip chip-idle">no mapped udp</span>';
+      }
+      const source = String((peer && peer.observedUdpSource) || "").trim();
+      if (source === "stun") {
+        return '<span class="chip chip-route-udp">public mapped</span>';
+      }
+      return '<span class="chip chip-info">observed udp</span>';
+    }
+
+    function countObservedUDPSource(swarms, source) {
+      let total = 0;
+      for (const swarm of swarms || []) {
+        for (const peer of (swarm.peers || [])) {
+          if (!peer || !peer.observedUdpAddr) continue;
+          if (String(peer.observedUdpSource || "") === source) total += 1;
+        }
+      }
+      return total;
+    }
+
+    function countObservedUDPPeers(swarms) {
+      let total = 0;
+      for (const swarm of swarms || []) {
+        for (const peer of (swarm.peers || [])) {
+          if (peer && peer.observedUdpAddr) total += 1;
+        }
+      }
+      return total;
     }
 
     function peerRouteDrift(advice, item) {

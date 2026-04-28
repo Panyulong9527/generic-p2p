@@ -76,8 +76,9 @@ func watchTrackerStatus(trackerURL string, interval time.Duration, pretty bool, 
 func printPrettyTrackerStatus(status tracker.StatusResponse) {
 	udpMiss, udpRecovered, aligned := summarizeTrackerRouteDrift(status)
 	fallbackActive := summarizeTrackerFallbackActive(status)
+	publicMapped := summarizeTrackerPublicMapped(status)
 	fmt.Printf(
-		"tracker peers=%d swarms=%d pendingUdpProbes=%d udpProbeSuccess=%d udpProbeFailure=%d udpKeepaliveSuccess=%d udpKeepaliveFailure=%d udpBurstProfiles=%d udpDecisions=%d udpMiss=%d udpRecovered=%d routeAligned=%d udpFallbackActive=%d peerTTL=%ds cleanup=%ds\n",
+		"tracker peers=%d swarms=%d pendingUdpProbes=%d udpProbeSuccess=%d udpProbeFailure=%d udpKeepaliveSuccess=%d udpKeepaliveFailure=%d udpBurstProfiles=%d udpDecisions=%d udpMiss=%d udpRecovered=%d routeAligned=%d udpFallbackActive=%d publicMapped=%d peerTTL=%ds cleanup=%ds\n",
 		status.PeerCount,
 		status.SwarmCount,
 		status.PendingUDPProbeCount,
@@ -91,6 +92,7 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 		udpRecovered,
 		aligned,
 		fallbackActive,
+		publicMapped,
 		status.PeerTTLSeconds,
 		status.CleanupIntervalSeconds,
 	)
@@ -289,13 +291,14 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 			fallbackState := trackerPeerFallbackState(peer, advice, actual, udpKeepaliveResults)
 			decision := udpDecisions[peer.PeerID]
 			fmt.Printf(
-				"    %s addrs=%s observed=%s udp=%s observedUdp=%s(%s) route=%s actual=%s routeDrift=%s udpFallback=%s burst=%s decision=%s have=%s lastSeen=%s\n",
+				"    %s addrs=%s observed=%s udp=%s observedUdp=%s(%s) udpHint=%s route=%s actual=%s routeDrift=%s udpFallback=%s burst=%s decision=%s have=%s lastSeen=%s\n",
 				peer.PeerID,
 				strings.Join(peer.Addrs, ","),
 				peer.ObservedAddr,
 				strings.Join(peer.UDPAddrs, ","),
 				peer.ObservedUDPAddr,
 				emptyDash(peer.ObservedUDPSource),
+				trackerObservedUDPHint(peer),
 				advice,
 				emptyDash(actual.LastPath),
 				trackerRouteDrift(advice, actual.LastPath),
@@ -307,6 +310,16 @@ func printPrettyTrackerStatus(status tracker.StatusResponse) {
 			)
 		}
 	}
+}
+
+func trackerObservedUDPHint(peer tracker.PeerRecord) string {
+	if strings.TrimSpace(peer.ObservedUDPAddr) == "" {
+		return "-"
+	}
+	if strings.TrimSpace(peer.ObservedUDPSource) == "stun" {
+		return "public_mapped"
+	}
+	return "observed"
 }
 
 func trackerBurstProfileSummary(item tracker.UDPBurstProfileStatus) string {
@@ -425,6 +438,18 @@ func summarizeTrackerFallbackActive(status tracker.StatusResponse) int {
 	total := 0
 	for _, swarm := range status.Swarms {
 		total += summarizeSwarmFallbackActive(swarm, udpProbeResults, peerTransferPaths, udpKeepaliveResults)
+	}
+	return total
+}
+
+func summarizeTrackerPublicMapped(status tracker.StatusResponse) int {
+	total := 0
+	for _, swarm := range status.Swarms {
+		for _, peer := range swarm.Peers {
+			if strings.TrimSpace(peer.ObservedUDPAddr) != "" && strings.TrimSpace(peer.ObservedUDPSource) == "stun" {
+				total++
+			}
+		}
 	}
 	return total
 }
