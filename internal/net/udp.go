@@ -56,9 +56,10 @@ type UDPHaveResponse struct {
 }
 
 type UDPPieceRequest struct {
-	RequestID  string `json:"requestId"`
-	ContentID  string `json:"contentId"`
-	PieceIndex int    `json:"pieceIndex"`
+	RequestID    string `json:"requestId"`
+	ContentID    string `json:"contentId"`
+	PieceIndex   int    `json:"pieceIndex"`
+	ChunkIndexes []int  `json:"chunkIndexes,omitempty"`
 }
 
 type UDPPieceChunk struct {
@@ -148,10 +149,11 @@ var udpSharedSockets = struct {
 }
 
 type UDPServer struct {
-	ListenAddr    string
-	Source        ContentSource
-	OnPieceServed func(bytes int64, path string, peerID string)
-	socket        *udpSharedSocket
+	ListenAddr           string
+	Source               ContentSource
+	OnPieceServed        func(bytes int64, path string, peerID string)
+	ShouldSendPieceChunk func(remote string, pieceIndex int, chunkIndex int) bool
+	socket               *udpSharedSocket
 }
 
 func NewUDPServer(listenAddr string, source ContentSource) *UDPServer {
@@ -250,11 +252,14 @@ func (s *UDPServer) handleDatagram(socket *udpSharedSocket, remote *net.UDPAddr,
 			return
 		}
 		totalChunks := (len(data) + udpChunkDataBytes - 1) / udpChunkDataBytes
-		for chunkIndex := 0; chunkIndex < totalChunks; chunkIndex++ {
+		for _, chunkIndex := range udpRequestedChunkIndexes(req, totalChunks) {
 			start := chunkIndex * udpChunkDataBytes
 			end := start + udpChunkDataBytes
 			if end > len(data) {
 				end = len(data)
+			}
+			if s.ShouldSendPieceChunk != nil && !s.ShouldSendPieceChunk(remote.String(), req.PieceIndex, chunkIndex) {
+				continue
 			}
 			if err := writeUDPMessage(socket.conn, remote, UDPMessageTypePieceChunk, UDPPieceChunk{
 				RequestID:   req.RequestID,
@@ -687,72 +692,12 @@ func (c *UDPClient) FetchPiece(contentID string, pieceIndex int) ([]byte, error)
 	}
 	defer conn.Close()
 
-	if err := writeUDPMessage(conn, remote, UDPMessageTypePieceRequest, UDPPieceRequest{
-		RequestID:  requestID,
-		ContentID:  contentID,
-		PieceIndex: pieceIndex,
-	}); err != nil {
+	if err := writeUDPPieceRequest(conn, remote, requestID, contentID, pieceIndex, nil); err != nil {
 		return nil, err
 	}
 
-	deadline := time.Now().Add(c.Timeout)
-	chunks := make(map[int][]byte)
-	totalChunks := -1
 	buffer := make([]byte, udpMaxDatagramBytes)
-
-	for {
-		if totalChunks >= 0 && len(chunks) == totalChunks {
-			return joinUDPChunks(chunks, totalChunks), nil
-		}
-		if time.Now().After(deadline) {
-			return nil, &UDPTimeoutError{
-				Op:   fmt.Sprintf("fetch-piece-%d", pieceIndex),
-				Addr: c.Addr,
-				Err:  errors.New("piece deadline exceeded"),
-			}
-		}
-		if err := conn.SetReadDeadline(deadline); err != nil {
-			return nil, err
-		}
-		n, _, err := conn.ReadFromUDP(buffer)
-		if err != nil {
-			return nil, wrapUDPReadError(fmt.Sprintf("fetch-piece-%d", pieceIndex), c.Addr, err)
-		}
-		message, err := decodeUDPMessage(buffer[:n])
-		if err != nil {
-			continue
-		}
-		if message.Type == UDPMessageTypeError {
-			body, err := decodeUDPBody[UDPError](message)
-			if err != nil {
-				return nil, err
-			}
-			if body.RequestID == requestID {
-				return nil, errors.New(body.Message)
-			}
-			continue
-		}
-		if message.Type != UDPMessageTypePieceChunk {
-			continue
-		}
-		chunk, err := decodeUDPBody[UDPPieceChunk](message)
-		if err != nil {
-			return nil, err
-		}
-		if chunk.RequestID != requestID || chunk.ContentID != contentID || chunk.PieceIndex != pieceIndex {
-			continue
-		}
-		if chunk.TotalChunks <= 0 || chunk.ChunkIndex < 0 || chunk.ChunkIndex >= chunk.TotalChunks {
-			continue
-		}
-		if totalChunks == -1 {
-			totalChunks = chunk.TotalChunks
-		}
-		if chunk.TotalChunks != totalChunks {
-			continue
-		}
-		chunks[chunk.ChunkIndex] = chunk.Data
-	}
+	return c.collectPieceChunksWithConn(conn, remote, requestID, contentID, pieceIndex, buffer)
 }
 
 func (c *UDPClient) open() (*net.UDPConn, *net.UDPAddr, error) {
@@ -786,29 +731,38 @@ func (c *UDPClient) fetchPieceWithSharedSocket(remote *net.UDPAddr, requestID st
 	}
 	msgCh, release := socket.register(requestID)
 	defer release()
-	if err := writeUDPMessage(socket.conn, remote, UDPMessageTypePieceRequest, UDPPieceRequest{
-		RequestID:  requestID,
-		ContentID:  contentID,
-		PieceIndex: pieceIndex,
-	}); err != nil {
+	if err := writeUDPPieceRequest(socket.conn, remote, requestID, contentID, pieceIndex, nil); err != nil {
 		return nil, err
 	}
+	return c.collectPieceChunksWithSharedSocket(socket.conn, remote, msgCh, requestID, contentID, pieceIndex)
+}
+
+func (c *UDPClient) collectPieceChunksWithConn(conn *net.UDPConn, remote *net.UDPAddr, requestID string, contentID string, pieceIndex int, buffer []byte) ([]byte, error) {
 	chunks := make(map[int][]byte)
 	totalChunks := -1
-	deadline := time.NewTimer(c.Timeout)
-	defer deadline.Stop()
-	for {
-		if totalChunks >= 0 && len(chunks) == totalChunks {
-			return joinUDPChunks(chunks, totalChunks), nil
-		}
-		select {
-		case <-deadline.C:
-			return nil, &UDPTimeoutError{
-				Op:   fmt.Sprintf("fetch-piece-%d", pieceIndex),
-				Addr: c.Addr,
-				Err:  errors.New("piece deadline exceeded"),
+	for round := 0; round < 3; round++ {
+		deadline := time.Now().Add(c.Timeout)
+		for {
+			if totalChunks >= 0 && len(chunks) == totalChunks {
+				return joinUDPChunks(chunks, totalChunks), nil
 			}
-		case message := <-msgCh:
+			if time.Now().After(deadline) {
+				break
+			}
+			if err := conn.SetReadDeadline(deadline); err != nil {
+				return nil, err
+			}
+			n, _, err := conn.ReadFromUDP(buffer)
+			if err != nil {
+				if IsUDPTimeout(err) {
+					break
+				}
+				return nil, wrapUDPReadError(fmt.Sprintf("fetch-piece-%d", pieceIndex), c.Addr, err)
+			}
+			message, err := decodeUDPMessage(buffer[:n])
+			if err != nil {
+				continue
+			}
 			if message.Type == UDPMessageTypeError {
 				body, err := decodeUDPBody[UDPError](message)
 				if err != nil {
@@ -816,28 +770,148 @@ func (c *UDPClient) fetchPieceWithSharedSocket(remote *net.UDPAddr, requestID st
 				}
 				return nil, errors.New(body.Message)
 			}
-			if message.Type != UDPMessageTypePieceChunk {
+			if !collectUDPPieceChunk(message, requestID, contentID, pieceIndex, chunks, &totalChunks) {
 				continue
 			}
-			chunk, err := decodeUDPBody[UDPPieceChunk](message)
-			if err != nil {
-				return nil, err
-			}
-			if chunk.RequestID != requestID || chunk.ContentID != contentID || chunk.PieceIndex != pieceIndex {
-				continue
-			}
-			if chunk.TotalChunks <= 0 || chunk.ChunkIndex < 0 || chunk.ChunkIndex >= chunk.TotalChunks {
-				continue
-			}
-			if totalChunks == -1 {
-				totalChunks = chunk.TotalChunks
-			}
-			if chunk.TotalChunks != totalChunks {
-				continue
-			}
-			chunks[chunk.ChunkIndex] = chunk.Data
+		}
+		if totalChunks >= 0 && len(chunks) == totalChunks {
+			return joinUDPChunks(chunks, totalChunks), nil
+		}
+		if totalChunks <= 0 {
+			continue
+		}
+		missing := missingUDPPieceChunks(chunks, totalChunks)
+		if len(missing) == 0 {
+			return joinUDPChunks(chunks, totalChunks), nil
+		}
+		if err := writeUDPPieceRequest(conn, remote, requestID, contentID, pieceIndex, missing); err != nil {
+			return nil, err
 		}
 	}
+	return nil, &UDPTimeoutError{
+		Op:   fmt.Sprintf("fetch-piece-%d", pieceIndex),
+		Addr: c.Addr,
+		Err:  errors.New("piece deadline exceeded"),
+	}
+}
+
+func (c *UDPClient) collectPieceChunksWithSharedSocket(conn *net.UDPConn, remote *net.UDPAddr, msgCh <-chan UDPMessage, requestID string, contentID string, pieceIndex int) ([]byte, error) {
+	chunks := make(map[int][]byte)
+	totalChunks := -1
+	for round := 0; round < 3; round++ {
+		deadline := time.NewTimer(c.Timeout)
+		timedOut := false
+		for !timedOut {
+			if totalChunks >= 0 && len(chunks) == totalChunks {
+				deadline.Stop()
+				return joinUDPChunks(chunks, totalChunks), nil
+			}
+			select {
+			case <-deadline.C:
+				timedOut = true
+			case message := <-msgCh:
+				if message.Type == UDPMessageTypeError {
+					body, err := decodeUDPBody[UDPError](message)
+					if err != nil {
+						deadline.Stop()
+						return nil, err
+					}
+					deadline.Stop()
+					return nil, errors.New(body.Message)
+				}
+				collectUDPPieceChunk(message, requestID, contentID, pieceIndex, chunks, &totalChunks)
+			}
+		}
+		if totalChunks >= 0 && len(chunks) == totalChunks {
+			return joinUDPChunks(chunks, totalChunks), nil
+		}
+		if totalChunks <= 0 {
+			continue
+		}
+		missing := missingUDPPieceChunks(chunks, totalChunks)
+		if len(missing) == 0 {
+			return joinUDPChunks(chunks, totalChunks), nil
+		}
+		if err := writeUDPPieceRequest(conn, remote, requestID, contentID, pieceIndex, missing); err != nil {
+			return nil, err
+		}
+	}
+	return nil, &UDPTimeoutError{
+		Op:   fmt.Sprintf("fetch-piece-%d", pieceIndex),
+		Addr: c.Addr,
+		Err:  errors.New("piece deadline exceeded"),
+	}
+}
+
+func writeUDPPieceRequest(conn *net.UDPConn, remote *net.UDPAddr, requestID string, contentID string, pieceIndex int, chunkIndexes []int) error {
+	return writeUDPMessage(conn, remote, UDPMessageTypePieceRequest, UDPPieceRequest{
+		RequestID:    requestID,
+		ContentID:    contentID,
+		PieceIndex:   pieceIndex,
+		ChunkIndexes: append([]int(nil), chunkIndexes...),
+	})
+}
+
+func collectUDPPieceChunk(message UDPMessage, requestID string, contentID string, pieceIndex int, chunks map[int][]byte, totalChunks *int) bool {
+	if message.Type != UDPMessageTypePieceChunk {
+		return false
+	}
+	chunk, err := decodeUDPBody[UDPPieceChunk](message)
+	if err != nil {
+		return false
+	}
+	if chunk.RequestID != requestID || chunk.ContentID != contentID || chunk.PieceIndex != pieceIndex {
+		return false
+	}
+	if chunk.TotalChunks <= 0 || chunk.ChunkIndex < 0 || chunk.ChunkIndex >= chunk.TotalChunks {
+		return false
+	}
+	if *totalChunks == -1 {
+		*totalChunks = chunk.TotalChunks
+	}
+	if chunk.TotalChunks != *totalChunks {
+		return false
+	}
+	chunks[chunk.ChunkIndex] = chunk.Data
+	return true
+}
+
+func missingUDPPieceChunks(chunks map[int][]byte, totalChunks int) []int {
+	if totalChunks <= 0 {
+		return nil
+	}
+	missing := make([]int, 0, totalChunks-len(chunks))
+	for i := 0; i < totalChunks; i++ {
+		if _, ok := chunks[i]; ok {
+			continue
+		}
+		missing = append(missing, i)
+	}
+	return missing
+}
+
+func udpRequestedChunkIndexes(req UDPPieceRequest, totalChunks int) []int {
+	if totalChunks <= 0 {
+		return nil
+	}
+	if len(req.ChunkIndexes) == 0 {
+		indexes := make([]int, 0, totalChunks)
+		for i := 0; i < totalChunks; i++ {
+			indexes = append(indexes, i)
+		}
+		return indexes
+	}
+	seen := make(map[int]bool, len(req.ChunkIndexes))
+	indexes := make([]int, 0, len(req.ChunkIndexes))
+	for _, chunkIndex := range req.ChunkIndexes {
+		if chunkIndex < 0 || chunkIndex >= totalChunks || seen[chunkIndex] {
+			continue
+		}
+		seen[chunkIndex] = true
+		indexes = append(indexes, chunkIndex)
+	}
+	sort.Ints(indexes)
+	return indexes
 }
 
 func newUDPSharedSocket(conn *net.UDPConn) *udpSharedSocket {

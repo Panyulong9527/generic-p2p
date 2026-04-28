@@ -322,6 +322,64 @@ func TestUDPProbeStoresObservedPeerAddress(t *testing.T) {
 	}
 }
 
+func TestUDPClientFetchPieceRetransmitsMissingChunks(t *testing.T) {
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "retransmit.txt")
+	if err := os.WriteFile(sourcePath, []byte("hello udp transport"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := core.BuildManifestFromFile(sourcePath, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	addr := freeUDPAddr(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	dropped := false
+	server := NewUDPServer(addr, StaticContentSource{
+		ManifestFile: manifest,
+		FilePath:     sourcePath,
+	})
+	server.ShouldSendPieceChunk = func(remote string, pieceIndex int, chunkIndex int) bool {
+		if pieceIndex == 0 && chunkIndex == 1 && !dropped {
+			dropped = true
+			return false
+		}
+		return true
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Listen(ctx)
+	}()
+	waitForUDPServer(t, addr, manifest.ContentID)
+
+	client := NewUDPClient(addr, 120*time.Millisecond)
+	piece, err := client.FetchPiece(manifest.ContentID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(piece) != string(expected[:len(piece)]) {
+		t.Fatalf("unexpected retransmitted piece data: %q", string(piece))
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("udp server did not stop")
+	}
+}
+
 func freeUDPAddr(t *testing.T) string {
 	t.Helper()
 
