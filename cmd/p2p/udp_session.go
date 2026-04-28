@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	p2pnet "generic-p2p/internal/net"
 )
 
 type udpPeerSession struct {
@@ -21,6 +23,9 @@ type udpPeerSession struct {
 	RecommendedRoundTimeout  time.Duration
 	RecommendedAttemptBudget int
 	KeepaliveInterval        time.Duration
+	ChunkWindowDelta         int
+	RoundTimeoutDelta        time.Duration
+	AttemptBudgetDelta       int
 	LastActiveAt             time.Time
 	LastSuccessAt            time.Time
 	LastFailureAt            time.Time
@@ -154,6 +159,67 @@ func noteUDPSessionKeepalive(peerID string, remoteAddr string, now time.Time) {
 	session.LastKeepaliveAt = now
 	session.LastActiveAt = maxSessionTime(session.LastActiveAt, now)
 	session.State = udpSessionStateKind(session, now)
+	refreshUDPSessionRecommendations(&session, now)
+	udpSessionState.sessions[peerID] = session
+}
+
+func noteUDPSessionPieceRound(peerID string, remoteAddr string, stats p2pnet.UDPPieceRoundStats, now time.Time) {
+	peerID = strings.TrimSpace(peerID)
+	remoteAddr = strings.TrimSpace(remoteAddr)
+	if peerID == "" || stats.RequestedChunks <= 0 {
+		return
+	}
+
+	udpSessionState.mu.Lock()
+	defer udpSessionState.mu.Unlock()
+
+	session := udpSessionState.sessions[peerID]
+	session.PeerID = peerID
+	if session.Addresses == nil {
+		session.Addresses = make(map[string]time.Time)
+	}
+	if remoteAddr != "" {
+		session.Addresses[remoteAddr] = now
+		session.PrimaryAddr = remoteAddr
+	}
+	receiveRatio := float64(stats.ReceivedChunks) / float64(stats.RequestedChunks)
+	switch {
+	case stats.Completed && receiveRatio >= 0.9 && stats.Duration <= 800*time.Millisecond:
+		if session.ChunkWindowDelta < 1 {
+			session.ChunkWindowDelta++
+		}
+		if session.RoundTimeoutDelta > -200*time.Millisecond {
+			session.RoundTimeoutDelta -= 100 * time.Millisecond
+		}
+		if session.AttemptBudgetDelta < 1 {
+			session.AttemptBudgetDelta++
+		}
+	case stats.RequestedChunks > 0 && stats.ReceivedChunks == 0:
+		if session.ChunkWindowDelta > -1 {
+			session.ChunkWindowDelta--
+		}
+		if session.RoundTimeoutDelta < 250*time.Millisecond {
+			session.RoundTimeoutDelta += 150 * time.Millisecond
+		}
+		if session.AttemptBudgetDelta > -1 {
+			session.AttemptBudgetDelta--
+		}
+	case receiveRatio < 0.5:
+		if session.ChunkWindowDelta > -1 {
+			session.ChunkWindowDelta--
+		}
+		if session.RoundTimeoutDelta < 200*time.Millisecond {
+			session.RoundTimeoutDelta += 100 * time.Millisecond
+		}
+	case receiveRatio >= 0.85 && stats.Duration <= 900*time.Millisecond:
+		if session.ChunkWindowDelta < 1 {
+			session.ChunkWindowDelta++
+		}
+		if session.RoundTimeoutDelta > -150*time.Millisecond {
+			session.RoundTimeoutDelta -= 50 * time.Millisecond
+		}
+	}
+	session.LastActiveAt = now
 	refreshUDPSessionRecommendations(&session, now)
 	udpSessionState.sessions[peerID] = session
 }
@@ -503,6 +569,9 @@ func refreshUDPSessionRecommendations(session *udpPeerSession, now time.Time) {
 		session.RecommendedAttemptBudget = 3
 		session.KeepaliveInterval = 15 * time.Second
 	}
+	session.RecommendedChunkWindow = clampSessionChunkWindow(session.RecommendedChunkWindow + session.ChunkWindowDelta)
+	session.RecommendedRoundTimeout = clampSessionRoundTimeout(session.RecommendedRoundTimeout + session.RoundTimeoutDelta)
+	session.RecommendedAttemptBudget = clampSessionAttemptBudget(session.RecommendedAttemptBudget + session.AttemptBudgetDelta)
 }
 
 func udpSessionStateKind(session udpPeerSession, now time.Time) string {
@@ -552,6 +621,36 @@ func clampUDPSessionHealth(value float64) float64 {
 		return -1
 	}
 	return value
+}
+
+func clampSessionChunkWindow(window int) int {
+	if window < 2 {
+		return 2
+	}
+	if window > 7 {
+		return 7
+	}
+	return window
+}
+
+func clampSessionRoundTimeout(timeout time.Duration) time.Duration {
+	if timeout < 700*time.Millisecond {
+		return 700 * time.Millisecond
+	}
+	if timeout > 1500*time.Millisecond {
+		return 1500 * time.Millisecond
+	}
+	return timeout
+}
+
+func clampSessionAttemptBudget(budget int) int {
+	if budget < 1 {
+		return 1
+	}
+	if budget > 5 {
+		return 5
+	}
+	return budget
 }
 
 func maxSessionTime(left time.Time, right time.Time) time.Time {

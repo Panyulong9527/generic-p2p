@@ -254,6 +254,7 @@ func fetchPieceFromCandidate(candidate scheduler.PeerCandidate, contentID string
 			WithChunkRoundTimeout(udpPieceChunkRoundTimeoutForCandidate(contentID, candidate)).
 			WithPieceRoundObserver(func(stats p2pnet.UDPPieceRoundStats) {
 				recordUDPChunkProgress(contentID, candidate.PeerID, stats, time.Now())
+				noteUDPSessionPieceRound(candidate.PeerID, addr, stats, time.Now())
 			}).
 			FetchPiece(contentID, pieceIndex)
 	default:

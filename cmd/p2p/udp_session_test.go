@@ -1,7 +1,11 @@
 package main
 
-import "testing"
-import "time"
+import (
+	"testing"
+	"time"
+
+	p2pnet "generic-p2p/internal/net"
+)
 
 func TestUDPSessionPrefersLatestSuccessfulAddr(t *testing.T) {
 	now := time.Now()
@@ -154,5 +158,58 @@ func TestUDPSessionHealthCoolsAfterRepeatedFailures(t *testing.T) {
 	}
 	if session.LastErrorKind != "udp_timeout" {
 		t.Fatalf("expected last error kind udp_timeout, got %s", session.LastErrorKind)
+	}
+}
+
+func TestUDPSessionPieceRoundImprovesRecommendations(t *testing.T) {
+	now := time.Now()
+	peerID := "udp://session-piece-round-good"
+
+	noteUDPSessionSuccess(peerID, "198.51.100.71:9003", "sha256-demo", now.Add(-5*time.Second))
+	noteUDPSessionPieceRound(peerID, "198.51.100.71:9003", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  4,
+		Duration:        720 * time.Millisecond,
+		Completed:       true,
+	}, now)
+
+	session, ok := udpSessionSnapshot(peerID, now)
+	if !ok {
+		t.Fatal("expected session snapshot")
+	}
+	if session.RecommendedChunkWindow < 6 {
+		t.Fatalf("expected chunk round success to widen session window, got %+v", session)
+	}
+	if session.RecommendedRoundTimeout > 750*time.Millisecond {
+		t.Fatalf("expected chunk round success to tighten session timeout, got %+v", session)
+	}
+	if session.RecommendedAttemptBudget < 5 {
+		t.Fatalf("expected chunk round success to widen session budget, got %+v", session)
+	}
+}
+
+func TestUDPSessionPieceRoundCoolsRecommendations(t *testing.T) {
+	now := time.Now()
+	peerID := "udp://session-piece-round-bad"
+
+	noteUDPSessionSuccess(peerID, "198.51.100.72:9003", "sha256-demo", now.Add(-5*time.Second))
+	noteUDPSessionPieceRound(peerID, "198.51.100.72:9003", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  0,
+		Duration:        1300 * time.Millisecond,
+	}, now)
+
+	session, ok := udpSessionSnapshot(peerID, now)
+	if !ok {
+		t.Fatal("expected session snapshot")
+	}
+	if session.RecommendedChunkWindow > 4 {
+		t.Fatalf("expected failed chunk round to cool session window, got %+v", session)
+	}
+	if session.RecommendedRoundTimeout < time.Second {
+		t.Fatalf("expected failed chunk round to widen session timeout, got %+v", session)
+	}
+	if session.RecommendedAttemptBudget > 3 {
+		t.Fatalf("expected failed chunk round to cool session budget, got %+v", session)
 	}
 }
