@@ -280,10 +280,11 @@ func (s *UDPServer) handleDatagram(socket *udpSharedSocket, remote *net.UDPAddr,
 }
 
 type UDPClient struct {
-	Addr        string
-	LocalAddr   string
-	Timeout     time.Duration
-	ChunkWindow int
+	Addr              string
+	LocalAddr         string
+	Timeout           time.Duration
+	ChunkWindow       int
+	ChunkRoundTimeout time.Duration
 }
 
 type UDPBurstPhase struct {
@@ -313,6 +314,15 @@ func (c *UDPClient) WithChunkWindow(window int) *UDPClient {
 	}
 	clone := *c
 	clone.ChunkWindow = window
+	return &clone
+}
+
+func (c *UDPClient) WithChunkRoundTimeout(timeout time.Duration) *UDPClient {
+	if c == nil {
+		return nil
+	}
+	clone := *c
+	clone.ChunkRoundTimeout = timeout
 	return &clone
 }
 
@@ -752,8 +762,9 @@ func (c *UDPClient) collectPieceChunksWithConn(conn *net.UDPConn, remote *net.UD
 	chunks := make(map[int][]byte)
 	totalChunks := -1
 	window := c.chunkWindow()
+	roundTimeout := c.chunkRoundTimeout()
 	for round := 0; round < 6; round++ {
-		deadline := time.Now().Add(c.Timeout)
+		deadline := time.Now().Add(roundTimeout)
 		for {
 			if totalChunks >= 0 && len(chunks) == totalChunks {
 				return joinUDPChunks(chunks, totalChunks), nil
@@ -814,8 +825,9 @@ func (c *UDPClient) collectPieceChunksWithSharedSocket(conn *net.UDPConn, remote
 	chunks := make(map[int][]byte)
 	totalChunks := -1
 	window := c.chunkWindow()
+	roundTimeout := c.chunkRoundTimeout()
 	for round := 0; round < 6; round++ {
-		deadline := time.NewTimer(c.Timeout)
+		deadline := time.NewTimer(roundTimeout)
 		timedOut := false
 		for !timedOut {
 			if totalChunks >= 0 && len(chunks) == totalChunks {
@@ -925,6 +937,22 @@ func (c *UDPClient) chunkWindow() int {
 		return c.ChunkWindow
 	}
 	return udpPieceChunkWindow
+}
+
+func (c *UDPClient) chunkRoundTimeout() time.Duration {
+	if c == nil {
+		return 1500 * time.Millisecond
+	}
+	if c.ChunkRoundTimeout > 0 {
+		if c.Timeout > 0 && c.ChunkRoundTimeout > c.Timeout {
+			return c.Timeout
+		}
+		return c.ChunkRoundTimeout
+	}
+	if c.Timeout > 0 {
+		return c.Timeout
+	}
+	return 1500 * time.Millisecond
 }
 
 func udpRequestedChunkIndexes(req UDPPieceRequest, totalChunks int) []int {

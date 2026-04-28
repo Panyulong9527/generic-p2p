@@ -217,6 +217,7 @@ func fetchPieceFromCandidate(candidate scheduler.PeerCandidate, contentID string
 		return p2pnet.NewUDPClient(candidate.Addr, udpPieceTimeout(contentID, candidate)).
 			WithLocalAddr(selfUDPListenAddr).
 			WithChunkWindow(udpPieceChunkWindowForCandidate(contentID, candidate)).
+			WithChunkRoundTimeout(udpPieceChunkRoundTimeoutForCandidate(contentID, candidate)).
 			FetchPiece(contentID, pieceIndex)
 	default:
 		addr := candidate.Addr
@@ -244,6 +245,23 @@ func udpPieceChunkWindowForCandidate(contentID string, candidate scheduler.PeerC
 	return window
 }
 
+func udpPieceChunkRoundTimeoutForCandidate(contentID string, candidate scheduler.PeerCandidate) time.Duration {
+	timeout := udpPieceChunkRoundTimeoutForProfile(candidate.BurstProfile)
+	stage := currentUDPBurstStageForPeer(contentID, candidate.PeerID, time.Now())
+	timeout = stageAdjustedUDPPieceChunkRoundTimeout(timeout, stage)
+	timeout = decisionRiskAdjustedUDPPieceChunkRoundTimeout(timeout, candidate.UDPDecisionRisk)
+	if candidate.UDPPublicMapped && !isSuppressedDecisionRisk(candidate.UDPDecisionRisk) {
+		timeout -= 150 * time.Millisecond
+	}
+	if timeout < 250*time.Millisecond {
+		return 250 * time.Millisecond
+	}
+	if timeout > 2200*time.Millisecond {
+		return 2200 * time.Millisecond
+	}
+	return timeout
+}
+
 func udpPieceChunkWindowForProfile(profile string) int {
 	switch strings.TrimSpace(profile) {
 	case "warm":
@@ -267,6 +285,56 @@ func stageAdjustedUDPPieceChunkWindow(base int, stage string) int {
 			return base + 1
 		}
 		return 8
+	default:
+		return base
+	}
+}
+
+func udpPieceChunkRoundTimeoutForProfile(profile string) time.Duration {
+	switch strings.TrimSpace(profile) {
+	case "warm":
+		return 700 * time.Millisecond
+	case "aggressive":
+		return 1400 * time.Millisecond
+	default:
+		return time.Second
+	}
+}
+
+func stageAdjustedUDPPieceChunkRoundTimeout(base time.Duration, stage string) time.Duration {
+	switch strings.TrimSpace(stage) {
+	case "probe":
+		if base > 250*time.Millisecond {
+			return base - 250*time.Millisecond
+		}
+		return 250 * time.Millisecond
+	case "piece":
+		if base < 1900*time.Millisecond {
+			return base + 300*time.Millisecond
+		}
+		return 2200 * time.Millisecond
+	default:
+		return base
+	}
+}
+
+func decisionRiskAdjustedUDPPieceChunkRoundTimeout(base time.Duration, risk string) time.Duration {
+	switch strings.TrimSpace(risk) {
+	case "low":
+		if base > 400*time.Millisecond {
+			return base - 300*time.Millisecond
+		}
+		return 250 * time.Millisecond
+	case "warn":
+		if base > 300*time.Millisecond {
+			return base - 150*time.Millisecond
+		}
+		return 250 * time.Millisecond
+	case "stable":
+		if base < 2*time.Second {
+			return base + 200*time.Millisecond
+		}
+		return 2200 * time.Millisecond
 	default:
 		return base
 	}

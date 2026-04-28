@@ -282,3 +282,41 @@ func TestUDPPieceChunkWindowAdjustsByStageRiskAndPublicMapping(t *testing.T) {
 		t.Fatalf("expected aggressive/probe/low window 1, got %d", got)
 	}
 }
+
+func TestUDPPieceChunkRoundTimeoutVariesByProfile(t *testing.T) {
+	if got := udpPieceChunkRoundTimeoutForCandidate("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "warm"}); got != 700*time.Millisecond {
+		t.Fatalf("expected warm chunk round timeout 700ms, got %s", got)
+	}
+	if got := udpPieceChunkRoundTimeoutForCandidate("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "aggressive"}); got != 1400*time.Millisecond {
+		t.Fatalf("expected aggressive chunk round timeout 1.4s, got %s", got)
+	}
+	if got := udpPieceChunkRoundTimeoutForCandidate("", scheduler.PeerCandidate{Transport: "udp"}); got != time.Second {
+		t.Fatalf("expected default chunk round timeout 1s, got %s", got)
+	}
+}
+
+func TestUDPPieceChunkRoundTimeoutAdjustsByStageRiskAndPublicMapping(t *testing.T) {
+	now := time.Now()
+	const contentID = "sha256-download-round-timeout-stage"
+	recordUDPBurstOutcome(contentID, "udp://piece-round-peer", "warm", "piece", true, now.Add(-2*time.Second))
+	recordUDPBurstOutcome(contentID, "udp://probe-round-peer", "aggressive", "probe", false, now.Add(-2*time.Second))
+
+	if got := udpPieceChunkRoundTimeoutForCandidate(contentID, scheduler.PeerCandidate{
+		Transport:       "udp",
+		PeerID:          "udp://piece-round-peer",
+		BurstProfile:    "warm",
+		UDPDecisionRisk: "stable",
+		UDPPublicMapped: true,
+	}); got != 1050*time.Millisecond {
+		t.Fatalf("expected warm/piece/stable/public-mapped round timeout 1050ms, got %s", got)
+	}
+
+	if got := udpPieceChunkRoundTimeoutForCandidate(contentID, scheduler.PeerCandidate{
+		Transport:       "udp",
+		PeerID:          "udp://probe-round-peer",
+		BurstProfile:    "aggressive",
+		UDPDecisionRisk: "low",
+	}); got != 850*time.Millisecond {
+		t.Fatalf("expected aggressive/probe/low round timeout 850ms, got %s", got)
+	}
+}
