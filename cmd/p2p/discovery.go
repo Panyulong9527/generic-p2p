@@ -116,6 +116,7 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 			pref.decisionRisk = decisionRisk
 			pref.source = "local_observed"
 			preferences[observedAddr] = pref
+			noteUDPSessionAddr(peer.PeerID, observedAddr, "local_observed", contentID, now)
 			maybeKeepAliveUDPPath(logger, contentID, peer.PeerID, trackerURL, selfUDPListenAddr, observedAddr, now)
 		}
 		for _, addr := range peer.UDPAddrs {
@@ -137,6 +138,7 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 				pref.source = "declared_udp"
 			}
 			preferences[addr] = pref
+			noteUDPSessionAddr(peer.PeerID, addr, "declared_udp", contentID, now)
 		}
 		if peer.ObservedUDPAddr != "" && peer.ObservedUDPAddr != selfUDPListenAddr {
 			logger.Info("tracker_observed_udp_peer_discovered",
@@ -156,6 +158,7 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 				pref.source = "tracker"
 			}
 			preferences[peer.ObservedUDPAddr] = pref
+			noteUDPSessionAddr(peer.PeerID, peer.ObservedUDPAddr, pref.source, contentID, now)
 			maybeKeepAliveUDPPath(logger, contentID, peer.PeerID, trackerURL, selfUDPListenAddr, peer.ObservedUDPAddr, now)
 		}
 	}
@@ -167,6 +170,7 @@ func maybeRequesterSideBurstPunch(logger *logging.Logger, contentID string, peer
 		return
 	}
 	targets := requesterSideBurstPunchTargets(peer, selfUDPListenAddr)
+	targets = appendUnique(targets, udpSessionAddrs(peer.PeerID, time.Now())...)
 	if len(targets) == 0 {
 		return
 	}
@@ -177,6 +181,7 @@ func maybeRequesterSideBurstPunch(logger *logging.Logger, contentID string, peer
 				WithLocalAddr(selfUDPListenAddr).
 				ProbeMultiBurstForPeer(contentID, peer.PeerID, phases); err != nil {
 				recordUDPBurstOutcome(contentID, peer.PeerID, profile, "probe", false, time.Now())
+				noteUDPSessionFailure(peer.PeerID, target, time.Now())
 				logger.Info("tracker_udp_requester_burst_probe_failed",
 					"contentId", contentID,
 					"peerId", peer.PeerID,
@@ -187,6 +192,7 @@ func maybeRequesterSideBurstPunch(logger *logging.Logger, contentID string, peer
 				continue
 			}
 			recordUDPBurstOutcome(contentID, peer.PeerID, profile, "probe", true, time.Now())
+			noteUDPSessionSuccess(peer.PeerID, target, contentID, time.Now())
 			logger.Info("tracker_udp_requester_burst_probe_sent",
 				"contentId", contentID,
 				"peerId", peer.PeerID,
@@ -652,11 +658,16 @@ func maxTime(left time.Time, right time.Time) time.Time {
 }
 
 func maybeKeepAliveUDPPath(logger *logging.Logger, contentID string, peerID string, trackerURL string, selfUDPListenAddr string, remoteAddr string, now time.Time) {
+	noteUDPSessionAddr(peerID, remoteAddr, "keepalive_target", contentID, now)
 	if !p2pnet.ShouldKeepAliveObservedUDPPeer(selfUDPListenAddr, contentID, peerID, remoteAddr, 8*time.Second, now) {
+		return
+	}
+	if !udpSessionShouldSendKeepalive(peerID, remoteAddr, now) {
 		return
 	}
 	go func() {
 		if err := p2pnet.NewUDPClient(remoteAddr, 1500*time.Millisecond).WithLocalAddr(selfUDPListenAddr).ProbeForPeer(contentID, peerID); err != nil {
+			noteUDPSessionFailure(peerID, remoteAddr, time.Now())
 			reportTrackerUDPKeepalive(logger, trackerURL, "udp://"+remoteAddr, contentID, false, udpDiscoveryErrorKind(err))
 			logger.Info("udp_keepalive_failed",
 				"contentId", contentID,
@@ -666,6 +677,7 @@ func maybeKeepAliveUDPPath(logger *logging.Logger, contentID string, peerID stri
 			)
 			return
 		}
+		noteUDPSessionSuccess(peerID, remoteAddr, contentID, time.Now())
 		reportTrackerUDPKeepalive(logger, trackerURL, "udp://"+remoteAddr, contentID, true, "")
 		logger.Info("udp_keepalive_sent",
 			"contentId", contentID,
@@ -715,6 +727,7 @@ func collectDynamicPeerCandidates(logger *logging.Logger, options peerDiscoveryO
 	now := time.Now()
 	var candidates []scheduler.PeerCandidate
 	keepAliveRecentUDPSuccesses(logger, options.contentID, options.trackerURL, options.selfUDPListenAddr, now)
+	keepAliveUDPSessions(logger, options.contentID, options.trackerURL, options.selfUDPListenAddr, now)
 	if discoveryCache != nil {
 		if cached, ok := discoveryCache.Load(options.contentID, now); ok {
 			return filterPeerCandidates(logger, options.contentID, cached, peerHealth, excluded, now, peerLoad, peerUsage)
@@ -770,6 +783,7 @@ func keepAliveRecentUDPSuccesses(logger *logging.Logger, contentID string, track
 		}
 		go func(remote string) {
 			if err := p2pnet.NewUDPClient(remote, 1200*time.Millisecond).WithLocalAddr(selfUDPListenAddr).Probe(); err != nil {
+				noteUDPSessionFailure("udp://"+remote, remote, time.Now())
 				reportTrackerUDPKeepalive(logger, trackerURL, "udp://"+remote, contentID, false, udpDiscoveryErrorKind(err))
 				logger.Info("udp_success_keepalive_failed",
 					"contentId", contentID,
@@ -778,12 +792,45 @@ func keepAliveRecentUDPSuccesses(logger *logging.Logger, contentID string, track
 				)
 				return
 			}
+			noteUDPSessionSuccess("udp://"+remote, remote, contentID, time.Now())
 			reportTrackerUDPKeepalive(logger, trackerURL, "udp://"+remote, contentID, true, "")
 			logger.Info("udp_success_keepalive_sent",
 				"contentId", contentID,
 				"remote", remote,
 			)
 		}(remoteAddr)
+	}
+}
+
+func keepAliveUDPSessions(logger *logging.Logger, contentID string, trackerURL string, selfUDPListenAddr string, now time.Time) {
+	if strings.TrimSpace(selfUDPListenAddr) == "" {
+		return
+	}
+	for _, session := range udpWarmSessionPeers(contentID, now) {
+		remoteAddr := strings.TrimSpace(session.PrimaryAddr)
+		if remoteAddr == "" || !udpSessionShouldSendKeepalive(session.PeerID, remoteAddr, now) {
+			continue
+		}
+		go func(peerID string, remote string) {
+			if err := p2pnet.NewUDPClient(remote, 1200*time.Millisecond).WithLocalAddr(selfUDPListenAddr).ProbeForPeer(contentID, peerID); err != nil {
+				noteUDPSessionFailure(peerID, remote, time.Now())
+				reportTrackerUDPKeepalive(logger, trackerURL, peerID, contentID, false, udpDiscoveryErrorKind(err))
+				logger.Info("udp_session_keepalive_failed",
+					"contentId", contentID,
+					"peerId", peerID,
+					"remote", remote,
+					"error", err.Error(),
+				)
+				return
+			}
+			noteUDPSessionSuccess(peerID, remote, contentID, time.Now())
+			reportTrackerUDPKeepalive(logger, trackerURL, peerID, contentID, true, "")
+			logger.Info("udp_session_keepalive_sent",
+				"contentId", contentID,
+				"peerId", peerID,
+				"remote", remote,
+			)
+		}(session.PeerID, remoteAddr)
 	}
 }
 
@@ -846,6 +893,7 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 		} else {
 			if err := probeClient.Probe(); err != nil {
 				recordUDPBurstOutcome(contentID, peerID, normalizedBurstProfile(burstProfile), "probe", false, time.Now())
+				noteUDPSessionFailure(peerID, addr, time.Now())
 				udpProbes.Store(addr, false, now)
 				var cooldown time.Duration
 				if peerHealth != nil {
@@ -861,6 +909,7 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 				continue
 			}
 			recordUDPBurstOutcome(contentID, peerID, normalizedBurstProfile(burstProfile), "probe", true, time.Now())
+			noteUDPSessionSuccess(peerID, addr, contentID, time.Now())
 			udpProbes.Store(addr, true, now)
 			logger.Info("udp_peer_probe_ok", "contentId", contentID, "peer", peerID)
 		}
@@ -868,6 +917,7 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 		haveRanges, err := haveClient.FetchHave(contentID)
 		if err != nil {
 			recordUDPBurstOutcome(contentID, peerID, normalizedBurstProfile(burstProfile), "have", false, time.Now())
+			noteUDPSessionFailure(peerID, addr, time.Now())
 			var cooldown time.Duration
 			errorKind := udpDiscoveryErrorKind(err)
 			if peerHealth != nil {
@@ -883,6 +933,7 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 			continue
 		}
 		recordUDPBurstOutcome(contentID, peerID, normalizedBurstProfile(burstProfile), "have", true, time.Now())
+		noteUDPSessionSuccess(peerID, addr, contentID, time.Now())
 		if peerHealth != nil {
 			peerHealth.MarkSuccess(peerID)
 		}
@@ -935,6 +986,7 @@ func udpCandidateScore(contentID string, addr string, udpPreferences map[string]
 		score = udpCandidateBaseScoreBySource(preference.source)
 	}
 	score += preference.trackerBias
+	score += udpSessionDiscoveryBias(contentID, "udp://"+addr, now)
 	score += udpChunkProgressDiscoveryBias(contentID, "udp://"+addr, now)
 	return score
 }

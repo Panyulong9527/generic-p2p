@@ -179,6 +179,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 			if lastErr != nil {
 				if candidate.Transport == "udp" {
 					recordUDPBurstOutcome(manifest.ContentID, candidate.PeerID, normalizedBurstProfile(candidate.BurstProfile), "piece", false, time.Now())
+					noteUDPSessionFailure(candidate.PeerID, candidate.Addr, time.Now())
 				}
 				errorKind := transferErrorKind(candidate, lastErr)
 				cooldown := peerHealth.MarkFailureKind(candidate.PeerID, errorKind, time.Now())
@@ -204,6 +205,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 			if candidate.Transport == "udp" {
 				recordUDPBurstOutcome(manifest.ContentID, candidate.PeerID, normalizedBurstProfile(candidate.BurstProfile), "piece", true, time.Now())
 				p2pnet.RememberRecentUDPSuccess(manifest.ContentID, candidate.Addr, time.Now())
+				noteUDPSessionSuccess(candidate.PeerID, candidate.Addr, manifest.ContentID, time.Now())
 			}
 			break
 		}
@@ -241,7 +243,12 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 func fetchPieceFromCandidate(candidate scheduler.PeerCandidate, contentID string, pieceIndex int, selfUDPListenAddr string) ([]byte, error) {
 	switch candidate.Transport {
 	case "udp":
-		return p2pnet.NewUDPClient(candidate.Addr, udpPieceTimeout(contentID, candidate)).
+		addr := candidate.Addr
+		if preferredAddr, ok := udpSessionPreferredAddr(candidate.PeerID, time.Now()); ok {
+			addr = preferredAddr
+		}
+		noteUDPSessionAddr(candidate.PeerID, addr, "piece_fetch", contentID, time.Now())
+		return p2pnet.NewUDPClient(addr, udpPieceTimeout(contentID, candidate)).
 			WithLocalAddr(selfUDPListenAddr).
 			WithChunkWindow(udpPieceChunkWindowForCandidate(contentID, candidate)).
 			WithChunkRoundTimeout(udpPieceChunkRoundTimeoutForCandidate(contentID, candidate)).
