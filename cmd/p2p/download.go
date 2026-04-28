@@ -270,6 +270,7 @@ func udpPieceChunkWindowForCandidate(contentID string, candidate scheduler.PeerC
 	stage := currentUDPBurstStageForPeer(contentID, candidate.PeerID, time.Now())
 	window = stageAdjustedUDPPieceChunkWindow(window, stage)
 	window = decisionRiskAdjustedUDPPieceChunkWindow(window, candidate.UDPDecisionRisk)
+	window += udpSessionWindowBias(candidate.PeerID, time.Now())
 	window = progressAdjustedUDPPieceChunkWindow(window, contentID, candidate.PeerID, time.Now())
 	if candidate.UDPPublicMapped && !isSuppressedDecisionRisk(candidate.UDPDecisionRisk) && window < 8 {
 		window++
@@ -288,6 +289,7 @@ func udpPieceChunkRoundTimeoutForCandidate(contentID string, candidate scheduler
 	stage := currentUDPBurstStageForPeer(contentID, candidate.PeerID, time.Now())
 	timeout = stageAdjustedUDPPieceChunkRoundTimeout(timeout, stage)
 	timeout = decisionRiskAdjustedUDPPieceChunkRoundTimeout(timeout, candidate.UDPDecisionRisk)
+	timeout += udpSessionRoundTimeoutBias(candidate.PeerID, time.Now())
 	timeout = progressAdjustedUDPPieceChunkRoundTimeout(timeout, contentID, candidate.PeerID, time.Now())
 	if candidate.UDPPublicMapped && !isSuppressedDecisionRisk(candidate.UDPDecisionRisk) {
 		timeout -= 150 * time.Millisecond
@@ -517,6 +519,7 @@ func udpAttemptBudget(contentID string, selected scheduler.PeerCandidate) int {
 	stage := currentUDPBurstStageForPeer(contentID, selected.PeerID, time.Now())
 	base = stageAdjustedUDPAttemptBudget(base, stage)
 	base = decisionRiskAdjustedUDPAttemptBudget(base, selected.UDPDecisionRisk)
+	base += udpSessionAttemptBudgetBias(selected.PeerID, time.Now())
 	return progressAdjustedUDPAttemptBudget(base, contentID, selected.PeerID, time.Now())
 }
 

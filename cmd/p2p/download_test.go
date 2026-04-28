@@ -252,6 +252,23 @@ func TestUDPAttemptBudgetAdjustsBySmoothedChunkProgress(t *testing.T) {
 	}
 }
 
+func TestUDPAttemptBudgetAdjustsBySessionState(t *testing.T) {
+	now := time.Now()
+	activePeer := "udp://session-budget-active"
+	coolingPeer := "udp://session-budget-cooling"
+
+	noteUDPSessionSuccess(activePeer, "198.51.100.81:9003", "sha256-session-budget", now.Add(-6*time.Second))
+	noteUDPSessionSuccess(coolingPeer, "198.51.100.82:9003", "sha256-session-budget", now.Add(-35*time.Second))
+	noteUDPSessionFailure(coolingPeer, "198.51.100.82:9003", now.Add(-3*time.Second))
+
+	if got := udpAttemptBudget("", scheduler.PeerCandidate{Transport: "udp", PeerID: activePeer}); got != 4 {
+		t.Fatalf("expected active session to widen default budget to 4, got %d", got)
+	}
+	if got := udpAttemptBudget("", scheduler.PeerCandidate{Transport: "udp", PeerID: coolingPeer}); got != 2 {
+		t.Fatalf("expected cooling session to shrink default budget to 2, got %d", got)
+	}
+}
+
 func TestUDPPieceTimeoutVariesByBurstProfile(t *testing.T) {
 	if got := udpPieceTimeout("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "warm"}); got != 3500*time.Millisecond {
 		t.Fatalf("expected warm timeout 3.5s, got %s", got)
@@ -494,6 +511,23 @@ func TestUDPPieceChunkWindowAdjustsByRecentProgress(t *testing.T) {
 	}
 }
 
+func TestUDPPieceChunkWindowAdjustsBySessionState(t *testing.T) {
+	now := time.Now()
+	activePeer := "udp://session-window-active"
+	coolingPeer := "udp://session-window-cooling"
+
+	noteUDPSessionSuccess(activePeer, "198.51.100.61:9003", "sha256-session-window", now.Add(-8*time.Second))
+	noteUDPSessionSuccess(coolingPeer, "198.51.100.62:9003", "sha256-session-window", now.Add(-40*time.Second))
+	noteUDPSessionFailure(coolingPeer, "198.51.100.62:9003", now.Add(-4*time.Second))
+
+	if got := udpPieceChunkWindowForCandidate("", scheduler.PeerCandidate{Transport: "udp", PeerID: activePeer}); got != 5 {
+		t.Fatalf("expected active session to widen default chunk window to 5, got %d", got)
+	}
+	if got := udpPieceChunkWindowForCandidate("", scheduler.PeerCandidate{Transport: "udp", PeerID: coolingPeer}); got != 3 {
+		t.Fatalf("expected cooling session to shrink default chunk window to 3, got %d", got)
+	}
+}
+
 func TestUDPPieceChunkRoundTimeoutAdjustsByRecentProgress(t *testing.T) {
 	now := time.Now()
 	const contentID = "sha256-download-round-progress"
@@ -522,6 +556,23 @@ func TestUDPPieceChunkRoundTimeoutAdjustsByRecentProgress(t *testing.T) {
 		PeerID:    "udp://empty-round-peer",
 	}); got != 1250*time.Millisecond {
 		t.Fatalf("expected empty recent progress to widen default round timeout to 1250ms, got %s", got)
+	}
+}
+
+func TestUDPPieceChunkRoundTimeoutAdjustsBySessionState(t *testing.T) {
+	now := time.Now()
+	activePeer := "udp://session-round-active"
+	coolingPeer := "udp://session-round-cooling"
+
+	noteUDPSessionSuccess(activePeer, "198.51.100.71:9003", "sha256-session-round", now.Add(-8*time.Second))
+	noteUDPSessionSuccess(coolingPeer, "198.51.100.72:9003", "sha256-session-round", now.Add(-35*time.Second))
+	noteUDPSessionFailure(coolingPeer, "198.51.100.72:9003", now.Add(-5*time.Second))
+
+	if got := udpPieceChunkRoundTimeoutForCandidate("", scheduler.PeerCandidate{Transport: "udp", PeerID: activePeer}); got != 850*time.Millisecond {
+		t.Fatalf("expected active session to tighten default round timeout to 850ms, got %s", got)
+	}
+	if got := udpPieceChunkRoundTimeoutForCandidate("", scheduler.PeerCandidate{Transport: "udp", PeerID: coolingPeer}); got != 1250*time.Millisecond {
+		t.Fatalf("expected cooling session to widen default round timeout to 1250ms, got %s", got)
 	}
 }
 

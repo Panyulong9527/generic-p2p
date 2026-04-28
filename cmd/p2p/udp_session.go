@@ -11,6 +11,7 @@ type udpPeerSession struct {
 	PeerID           string
 	PrimaryAddr      string
 	Addresses        map[string]time.Time
+	State            string
 	LastActiveAt     time.Time
 	LastSuccessAt    time.Time
 	LastFailureAt    time.Time
@@ -49,6 +50,7 @@ func noteUDPSessionAddr(peerID string, remoteAddr string, source string, content
 	session.PrimaryAddr = remoteAddr
 	session.LastObservedAt = now
 	session.LastActiveAt = maxSessionTime(session.LastActiveAt, now)
+	session.State = udpSessionStateKind(session, now)
 	if strings.TrimSpace(source) != "" {
 		session.ObservedSource = strings.TrimSpace(source)
 	}
@@ -82,6 +84,7 @@ func noteUDPSessionSuccess(peerID string, remoteAddr string, contentID string, n
 	}
 	session.LastSuccessAt = now
 	session.LastActiveAt = now
+	session.State = udpSessionStateKind(session, now)
 	if strings.TrimSpace(contentID) != "" {
 		session.RecentContentIDs[strings.TrimSpace(contentID)] = now
 	}
@@ -110,6 +113,7 @@ func noteUDPSessionFailure(peerID string, remoteAddr string, now time.Time) {
 	}
 	session.LastFailureAt = now
 	session.LastActiveAt = maxSessionTime(session.LastActiveAt, now)
+	session.State = udpSessionStateKind(session, now)
 	udpSessionState.sessions[peerID] = session
 }
 
@@ -135,6 +139,7 @@ func noteUDPSessionKeepalive(peerID string, remoteAddr string, now time.Time) {
 	}
 	session.LastKeepaliveAt = now
 	session.LastActiveAt = maxSessionTime(session.LastActiveAt, now)
+	session.State = udpSessionStateKind(session, now)
 	udpSessionState.sessions[peerID] = session
 }
 
@@ -203,7 +208,8 @@ func udpSessionShouldSendKeepalive(peerID string, remoteAddr string, now time.Ti
 		return false
 	}
 	session.LastKeepaliveAt = now
-	session.LastActiveAt = maxTime(session.LastActiveAt, now)
+	session.LastActiveAt = maxSessionTime(session.LastActiveAt, now)
+	session.State = udpSessionStateKind(session, now)
 	udpSessionState.sessions[strings.TrimSpace(peerID)] = session
 	return true
 }
@@ -212,6 +218,14 @@ func udpSessionDiscoveryBias(contentID string, peerID string, now time.Time) flo
 	session, ok := udpSessionSnapshot(peerID, now)
 	if !ok {
 		return 0
+	}
+	switch udpSessionStateKind(session, now) {
+	case "active":
+		return 0.10
+	case "warm":
+		return 0.05
+	case "cooling":
+		return -0.08
 	}
 	if contentID != "" {
 		if seenAt, ok := session.RecentContentIDs[contentID]; ok && now.Sub(seenAt) <= 90*time.Second {
@@ -288,6 +302,7 @@ func pruneUDPSession(session udpPeerSession, now time.Time) udpPeerSession {
 			break
 		}
 	}
+	session.State = udpSessionStateKind(session, now)
 	return session
 }
 
@@ -322,13 +337,58 @@ func sessionShouldKeepAlive(session udpPeerSession, contentID string, now time.T
 }
 
 func udpSessionKeepaliveInterval(session udpPeerSession, now time.Time) time.Duration {
-	if !session.LastSuccessAt.IsZero() && now.Sub(session.LastSuccessAt) <= 20*time.Second {
+	switch udpSessionStateKind(session, now) {
+	case "active":
 		return 6 * time.Second
-	}
-	if !session.LastSuccessAt.IsZero() && now.Sub(session.LastSuccessAt) <= 60*time.Second {
+	case "warm":
 		return 10 * time.Second
+	case "cooling":
+		return 15 * time.Second
 	}
 	return 15 * time.Second
+}
+
+func udpSessionStateForPeer(peerID string, now time.Time) string {
+	session, ok := udpSessionSnapshot(peerID, now)
+	if !ok {
+		return ""
+	}
+	return udpSessionStateKind(session, now)
+}
+
+func udpSessionWindowBias(peerID string, now time.Time) int {
+	switch udpSessionStateForPeer(peerID, now) {
+	case "active":
+		return 1
+	case "cooling":
+		return -1
+	default:
+		return 0
+	}
+}
+
+func udpSessionRoundTimeoutBias(peerID string, now time.Time) time.Duration {
+	switch udpSessionStateForPeer(peerID, now) {
+	case "active":
+		return -150 * time.Millisecond
+	case "warm":
+		return -50 * time.Millisecond
+	case "cooling":
+		return 250 * time.Millisecond
+	default:
+		return 0
+	}
+}
+
+func udpSessionAttemptBudgetBias(peerID string, now time.Time) int {
+	switch udpSessionStateForPeer(peerID, now) {
+	case "active":
+		return 1
+	case "cooling":
+		return -1
+	default:
+		return 0
+	}
 }
 
 func sessionHasAddr(session udpPeerSession, remoteAddr string) bool {
@@ -355,6 +415,19 @@ func cloneUDPSession(session udpPeerSession) udpPeerSession {
 		}
 	}
 	return clone
+}
+
+func udpSessionStateKind(session udpPeerSession, now time.Time) string {
+	if !session.LastFailureAt.IsZero() && session.LastFailureAt.After(session.LastSuccessAt) && now.Sub(session.LastFailureAt) <= 25*time.Second {
+		return "cooling"
+	}
+	if !session.LastSuccessAt.IsZero() && now.Sub(session.LastSuccessAt) <= 20*time.Second {
+		return "active"
+	}
+	if !session.LastSuccessAt.IsZero() && now.Sub(session.LastSuccessAt) <= 90*time.Second {
+		return "warm"
+	}
+	return "idle"
 }
 
 func maxSessionTime(left time.Time, right time.Time) time.Time {

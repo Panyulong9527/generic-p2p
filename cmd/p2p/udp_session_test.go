@@ -45,8 +45,8 @@ func TestUDPSessionDiscoveryBiasRewardsRecentWarmSession(t *testing.T) {
 
 	noteUDPSessionSuccess(peerID, "198.51.100.30:9003", contentID, now.Add(-8*time.Second))
 
-	if got := udpSessionDiscoveryBias(contentID, peerID, now); got != 0.08 {
-		t.Fatalf("expected recent warm session bias 0.08, got %.2f", got)
+	if got := udpSessionDiscoveryBias(contentID, peerID, now); got != 0.10 {
+		t.Fatalf("expected recent active session bias 0.10, got %.2f", got)
 	}
 }
 
@@ -58,5 +58,28 @@ func TestUDPSessionExpiresAfterLongIdle(t *testing.T) {
 
 	if _, ok := udpSessionPreferredAddr(peerID, now); ok {
 		t.Fatal("expected long-idle session to expire")
+	}
+}
+
+func TestUDPSessionStateTransitions(t *testing.T) {
+	now := time.Now()
+
+	activePeer := "udp://session-state-active"
+	noteUDPSessionSuccess(activePeer, "198.51.100.51:9003", "sha256-demo", now.Add(-8*time.Second))
+	if got := udpSessionStateForPeer(activePeer, now); got != "active" {
+		t.Fatalf("expected active session state, got %s", got)
+	}
+
+	warmPeer := "udp://session-state-warm"
+	noteUDPSessionSuccess(warmPeer, "198.51.100.52:9003", "sha256-demo", now.Add(-45*time.Second))
+	if got := udpSessionStateForPeer(warmPeer, now); got != "warm" {
+		t.Fatalf("expected warm session state, got %s", got)
+	}
+
+	coolingPeer := "udp://session-state-cooling"
+	noteUDPSessionSuccess(coolingPeer, "198.51.100.53:9003", "sha256-demo", now.Add(-40*time.Second))
+	noteUDPSessionFailure(coolingPeer, "198.51.100.53:9003", now.Add(-5*time.Second))
+	if got := udpSessionStateForPeer(coolingPeer, now); got != "cooling" {
+		t.Fatalf("expected cooling session state, got %s", got)
 	}
 }
