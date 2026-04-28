@@ -69,6 +69,12 @@ func pieceAvailability(pieceIndex int, peers []PeerCandidate) int {
 }
 
 func betterPeer(candidate PeerCandidate, current PeerCandidate) bool {
+	if preferCandidateByTransportRisk(candidate, current) {
+		return true
+	}
+	if preferCurrentByTransportRisk(candidate, current) {
+		return false
+	}
 	if candidate.IsLAN != current.IsLAN {
 		return candidate.IsLAN
 	}
@@ -76,4 +82,38 @@ func betterPeer(candidate PeerCandidate, current PeerCandidate) bool {
 		return candidate.Score > current.Score
 	}
 	return candidate.PendingCount < current.PendingCount
+}
+
+func preferCandidateByTransportRisk(candidate PeerCandidate, current PeerCandidate) bool {
+	return candidate.Transport == "tcp" &&
+		current.Transport == "udp" &&
+		isSuppressedUDPRisk(current.UDPDecisionRisk) &&
+		candidate.Score >= current.Score-udpRiskTCPPreferenceMargin(current.UDPDecisionRisk)
+}
+
+func preferCurrentByTransportRisk(candidate PeerCandidate, current PeerCandidate) bool {
+	return current.Transport == "tcp" &&
+		candidate.Transport == "udp" &&
+		isSuppressedUDPRisk(candidate.UDPDecisionRisk) &&
+		current.Score >= candidate.Score-udpRiskTCPPreferenceMargin(candidate.UDPDecisionRisk)
+}
+
+func isSuppressedUDPRisk(risk string) bool {
+	switch risk {
+	case "low", "warn":
+		return true
+	default:
+		return false
+	}
+}
+
+func udpRiskTCPPreferenceMargin(risk string) float64 {
+	switch risk {
+	case "low":
+		return 0.35
+	case "warn":
+		return 0.18
+	default:
+		return 0
+	}
 }

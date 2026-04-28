@@ -87,6 +87,87 @@ func TestChoosePeerPrefersLowerPendingCountWhenOtherwiseEqual(t *testing.T) {
 	}
 }
 
+func TestChoosePeerPrefersTCPOverLowValueUDPWhenScoresAreClose(t *testing.T) {
+	s := Scheduler{}
+	peers := []PeerCandidate{
+		{
+			PeerID:          "udp-low",
+			Transport:       "udp",
+			Score:           1.26,
+			UDPDecisionRisk: "low",
+			HaveRanges:      []core.HaveRange{{Start: 0, End: 5}},
+		},
+		{
+			PeerID:     "tcp-steady",
+			Transport:  "tcp",
+			Score:      1.0,
+			HaveRanges: []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	peer, ok := s.ChoosePeer(2, peers)
+	if !ok {
+		t.Fatal("expected to select a peer")
+	}
+	if peer.PeerID != "tcp-steady" {
+		t.Fatalf("expected tcp peer to win over low-value udp, got %s", peer.PeerID)
+	}
+}
+
+func TestChoosePeerStillAllowsLowValueUDPWhenScoreIsClearlyHigher(t *testing.T) {
+	s := Scheduler{}
+	peers := []PeerCandidate{
+		{
+			PeerID:          "udp-low",
+			Transport:       "udp",
+			Score:           1.5,
+			UDPDecisionRisk: "low",
+			HaveRanges:      []core.HaveRange{{Start: 0, End: 5}},
+		},
+		{
+			PeerID:     "tcp-steady",
+			Transport:  "tcp",
+			Score:      1.0,
+			HaveRanges: []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	peer, ok := s.ChoosePeer(2, peers)
+	if !ok {
+		t.Fatal("expected to select a peer")
+	}
+	if peer.PeerID != "udp-low" {
+		t.Fatalf("expected udp peer to win when score gap is large, got %s", peer.PeerID)
+	}
+}
+
+func TestChoosePeerPrefersTCPOverWatchUDPWhenScoresAreNear(t *testing.T) {
+	s := Scheduler{}
+	peers := []PeerCandidate{
+		{
+			PeerID:          "udp-watch",
+			Transport:       "udp",
+			Score:           1.12,
+			UDPDecisionRisk: "warn",
+			HaveRanges:      []core.HaveRange{{Start: 0, End: 5}},
+		},
+		{
+			PeerID:     "tcp-steady",
+			Transport:  "tcp",
+			Score:      1.0,
+			HaveRanges: []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	peer, ok := s.ChoosePeer(2, peers)
+	if !ok {
+		t.Fatal("expected to select a peer")
+	}
+	if peer.PeerID != "tcp-steady" {
+		t.Fatalf("expected tcp peer to win over watch udp, got %s", peer.PeerID)
+	}
+}
+
 func TestChoosePiecePrefersRarestAvailable(t *testing.T) {
 	s := Scheduler{}
 	peers := []PeerCandidate{
