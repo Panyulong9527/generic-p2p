@@ -8,6 +8,8 @@ type PeerCandidate struct {
 	Transport            string
 	IsLAN                bool
 	Score                float64
+	PeerTopologyRole     string
+	PathAssistScore      float64
 	BurstProfile         string
 	UDPDecisionRisk      string
 	UDPPublicMapped      bool
@@ -74,6 +76,12 @@ func pieceAvailability(pieceIndex int, peers []PeerCandidate) int {
 }
 
 func betterPeer(candidate PeerCandidate, current PeerCandidate) bool {
+	if preferCandidateByTopologyRole(candidate, current) {
+		return true
+	}
+	if preferCurrentByTopologyRole(candidate, current) {
+		return false
+	}
 	if preferCandidateByPublicMappedUDP(candidate, current) {
 		return true
 	}
@@ -101,10 +109,64 @@ func betterPeer(candidate PeerCandidate, current PeerCandidate) bool {
 	if candidate.IsLAN != current.IsLAN {
 		return candidate.IsLAN
 	}
+	if candidate.PathAssistScore != current.PathAssistScore {
+		return candidate.PathAssistScore > current.PathAssistScore
+	}
 	if candidate.Score != current.Score {
 		return candidate.Score > current.Score
 	}
 	return candidate.PendingCount < current.PendingCount
+}
+
+func preferCandidateByTopologyRole(candidate PeerCandidate, current PeerCandidate) bool {
+	if topologyRolePriority(candidate.PeerTopologyRole) >= topologyRolePriority(current.PeerTopologyRole) {
+		return false
+	}
+	return candidate.Score >= current.Score-topologyRolePreferenceMargin(candidate.PeerTopologyRole, current.PeerTopologyRole)
+}
+
+func preferCurrentByTopologyRole(candidate PeerCandidate, current PeerCandidate) bool {
+	if topologyRolePriority(current.PeerTopologyRole) >= topologyRolePriority(candidate.PeerTopologyRole) {
+		return false
+	}
+	return current.Score >= candidate.Score-topologyRolePreferenceMargin(current.PeerTopologyRole, candidate.PeerTopologyRole)
+}
+
+func topologyRolePriority(role string) int {
+	switch role {
+	case "bulk":
+		return 0
+	case "backup":
+		return 1
+	case "assist":
+		return 2
+	case "fallback":
+		return 3
+	default:
+		return 2
+	}
+}
+
+func topologyRolePreferenceMargin(preferred string, other string) float64 {
+	switch preferred {
+	case "bulk":
+		if other == "fallback" {
+			return 0.40
+		}
+		return 0.24
+	case "backup":
+		if other == "fallback" {
+			return 0.28
+		}
+		return 0.16
+	case "assist":
+		if other == "fallback" {
+			return 0.12
+		}
+		return 0.08
+	default:
+		return 0
+	}
 }
 
 func preferCandidateByTransportRisk(candidate PeerCandidate, current PeerCandidate) bool {

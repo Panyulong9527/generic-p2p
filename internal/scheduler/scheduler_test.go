@@ -252,6 +252,62 @@ func TestChoosePeerPrefersHealthyUDPChunkProgressWhenScoresAreClose(t *testing.T
 	}
 }
 
+func TestChoosePeerPrefersBulkTopologyRoleWhenScoresAreClose(t *testing.T) {
+	s := Scheduler{}
+	peers := []PeerCandidate{
+		{
+			PeerID:           "udp-bulk",
+			Transport:        "udp",
+			Score:            1.06,
+			PeerTopologyRole: "bulk",
+			HaveRanges:       []core.HaveRange{{Start: 0, End: 5}},
+		},
+		{
+			PeerID:           "tcp-backup",
+			Transport:        "tcp",
+			Score:            1.0,
+			PeerTopologyRole: "backup",
+			HaveRanges:       []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	peer, ok := s.ChoosePeer(2, peers)
+	if !ok {
+		t.Fatal("expected to select a peer")
+	}
+	if peer.PeerID != "udp-bulk" {
+		t.Fatalf("expected bulk topology peer, got %s", peer.PeerID)
+	}
+}
+
+func TestChoosePeerPrefersBackupOverFallbackWhenScoresAreClose(t *testing.T) {
+	s := Scheduler{}
+	peers := []PeerCandidate{
+		{
+			PeerID:           "udp-fallback",
+			Transport:        "udp",
+			Score:            1.12,
+			PeerTopologyRole: "fallback",
+			HaveRanges:       []core.HaveRange{{Start: 0, End: 5}},
+		},
+		{
+			PeerID:           "tcp-backup",
+			Transport:        "tcp",
+			Score:            1.0,
+			PeerTopologyRole: "backup",
+			HaveRanges:       []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	peer, ok := s.ChoosePeer(2, peers)
+	if !ok {
+		t.Fatal("expected to select a peer")
+	}
+	if peer.PeerID != "tcp-backup" {
+		t.Fatalf("expected backup peer to beat fallback path, got %s", peer.PeerID)
+	}
+}
+
 func TestChoosePeerPrefersTCPOverWeakUDPChunkProgressWhenScoresAreClose(t *testing.T) {
 	s := Scheduler{}
 	peers := []PeerCandidate{

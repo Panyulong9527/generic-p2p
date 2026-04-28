@@ -51,6 +51,7 @@ type SelectionDecision struct {
 	SelectedPeerID          string  `json:"selectedPeerId"`
 	SelectedTransport       string  `json:"selectedTransport"`
 	SelectedScore           float64 `json:"selectedScore"`
+	SelectedTopologyRole    string  `json:"selectedTopologyRole,omitempty"`
 	SelectedBurstProfile    string  `json:"selectedBurstProfile,omitempty"`
 	SelectedLastStage       string  `json:"selectedLastStage,omitempty"`
 	SelectedUDPDecisionRisk string  `json:"selectedUdpDecisionRisk,omitempty"`
@@ -58,6 +59,7 @@ type SelectionDecision struct {
 	SelectedUDPTimeoutMs    int64   `json:"selectedUdpTimeoutMs,omitempty"`
 	TopUDPPeerID            string  `json:"topUdpPeerId,omitempty"`
 	TopUDPScore             float64 `json:"topUdpScore,omitempty"`
+	TopUDPTopologyRole      string  `json:"topUdpTopologyRole,omitempty"`
 	Reason                  string  `json:"reason"`
 	RecordedAt              string  `json:"recordedAt"`
 }

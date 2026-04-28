@@ -150,6 +150,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 			syncRuntimeUDPBurstProfiles(logger, store, discovery, manifest.ContentID, udpBurstReports)
 		}
 		peerCandidates = annotateUDPChunkProgress(peerCandidates, manifest.ContentID, time.Now())
+		peerCandidates = annotatePeerTopology(peerCandidates, manifest.ContentID, time.Now())
 
 		selected, ok := chooser.ChoosePeer(pieceIndex, peerCandidates)
 		if !ok {
@@ -491,6 +492,12 @@ func pieceAttemptCandidates(contentID string, pieceIndex int, selected scheduler
 		alternatives = append(alternatives, candidate)
 	}
 	sort.Slice(alternatives, func(i, j int) bool {
+		if peerTopologyRolePriority(alternatives[i].PeerTopologyRole) != peerTopologyRolePriority(alternatives[j].PeerTopologyRole) {
+			return peerTopologyRolePriority(alternatives[i].PeerTopologyRole) < peerTopologyRolePriority(alternatives[j].PeerTopologyRole)
+		}
+		if alternatives[i].PathAssistScore != alternatives[j].PathAssistScore {
+			return alternatives[i].PathAssistScore > alternatives[j].PathAssistScore
+		}
 		if progressOrder := compareUDPChunkProgress(contentID, alternatives[i].PeerID, alternatives[j].PeerID, time.Now()); progressOrder != 0 {
 			return progressOrder < 0
 		}
@@ -817,6 +824,7 @@ func recordSelectionDecision(store *core.PieceStore, pieceIndex int, selected sc
 		SelectedPeerID:          selected.PeerID,
 		SelectedTransport:       selected.Transport,
 		SelectedScore:           selected.Score,
+		SelectedTopologyRole:    strings.TrimSpace(selected.PeerTopologyRole),
 		SelectedBurstProfile:    normalizedBurstProfile(selected.BurstProfile),
 		SelectedLastStage:       currentUDPBurstStageForPeer(contentID, selected.PeerID, time.Now()),
 		SelectedUDPDecisionRisk: strings.TrimSpace(selected.UDPDecisionRisk),
@@ -830,6 +838,7 @@ func recordSelectionDecision(store *core.PieceStore, pieceIndex int, selected sc
 	if topUDP, ok := topUDPCandidateForPiece(pieceIndex, peerCandidates); ok {
 		decision.TopUDPPeerID = topUDP.PeerID
 		decision.TopUDPScore = topUDP.Score
+		decision.TopUDPTopologyRole = strings.TrimSpace(topUDP.PeerTopologyRole)
 	}
 	if runtime != nil {
 		_ = runtime.RecordSelectionDecision(decision)
@@ -904,6 +913,12 @@ func reportTrackerUDPDecision(logger *logging.Logger, discovery peerDiscoveryOpt
 
 func selectionReason(pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) string {
 	if selected.Transport == "udp" {
+		if strings.TrimSpace(selected.PeerTopologyRole) == peerTopologyRoleBulk && selectedByTopologyRolePreference(pieceIndex, selected, peerCandidates) {
+			return "selected_udp_bulk_path"
+		}
+		if strings.TrimSpace(selected.PeerTopologyRole) == peerTopologyRoleAssist && selectedByTopologyRolePreference(pieceIndex, selected, peerCandidates) {
+			return "selected_udp_assist_path"
+		}
 		if selected.UDPPublicMapped && selectedByPublicMappedPreference(pieceIndex, selected, peerCandidates) {
 			return "selected_udp_public_mapped_close_score"
 		}
@@ -923,6 +938,14 @@ func selectionReason(pieceIndex int, selected scheduler.PeerCandidate, peerCandi
 		return "selected_udp_best_score"
 	}
 	if topUDP, ok := topUDPCandidateForPiece(pieceIndex, peerCandidates); ok {
+		switch strings.TrimSpace(topUDP.PeerTopologyRole) {
+		case peerTopologyRoleFallback:
+			return "selected_tcp_over_fallback_udp"
+		case peerTopologyRoleAssist:
+			if selectedByTCPOverAssistUDP(pieceIndex, selected, topUDP, peerCandidates) {
+				return "selected_tcp_over_assist_udp"
+			}
+		}
 		if topUDPRejectedByWeakChunkProgress(pieceIndex, selected, topUDP, peerCandidates) {
 			return "selected_tcp_over_weak_udp_progress"
 		}
@@ -938,6 +961,44 @@ func selectionReason(pieceIndex int, selected scheduler.PeerCandidate, peerCandi
 		return "selected_tcp_over_udp_candidate"
 	}
 	return "selected_tcp_no_udp_candidate"
+}
+
+func selectedByTopologyRolePreference(pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) bool {
+	selectedPriority := peerTopologyRolePriority(selected.PeerTopologyRole)
+	if selectedPriority > peerTopologyRolePriority(peerTopologyRoleAssist) {
+		return false
+	}
+	for _, candidate := range peerCandidates {
+		if candidate.PeerID == selected.PeerID {
+			continue
+		}
+		if pieceIndex >= 0 && !core.ContainsPiece(candidate.HaveRanges, pieceIndex) {
+			continue
+		}
+		if peerTopologyRolePriority(candidate.PeerTopologyRole) <= selectedPriority {
+			continue
+		}
+		if selected.Score >= candidate.Score-0.18 {
+			return true
+		}
+	}
+	return false
+}
+
+func selectedByTCPOverAssistUDP(pieceIndex int, selected scheduler.PeerCandidate, topUDP scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) bool {
+	if selected.Transport != "tcp" || strings.TrimSpace(topUDP.PeerTopologyRole) != peerTopologyRoleAssist {
+		return false
+	}
+	for _, candidate := range peerCandidates {
+		if candidate.PeerID != selected.PeerID || candidate.Transport != "tcp" {
+			continue
+		}
+		if pieceIndex >= 0 && !core.ContainsPiece(candidate.HaveRanges, pieceIndex) {
+			continue
+		}
+		return candidate.Score >= topUDP.Score-0.10
+	}
+	return false
 }
 
 func selectedByPublicMappedPreference(pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) bool {

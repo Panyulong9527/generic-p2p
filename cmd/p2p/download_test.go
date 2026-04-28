@@ -392,6 +392,54 @@ func TestSelectionReasonMarksChunkProgressCloseScorePreference(t *testing.T) {
 	}
 }
 
+func TestSelectionReasonMarksBulkTopologyPreference(t *testing.T) {
+	selected := scheduler.PeerCandidate{
+		PeerID:           "udp://bulk",
+		Transport:        "udp",
+		Score:            1.06,
+		PeerTopologyRole: peerTopologyRoleBulk,
+		HaveRanges:       []core.HaveRange{{Start: 0, End: 5}},
+	}
+	peers := []scheduler.PeerCandidate{
+		selected,
+		{
+			PeerID:           "tcp://backup",
+			Transport:        "tcp",
+			Score:            1.0,
+			PeerTopologyRole: peerTopologyRoleBackup,
+			HaveRanges:       []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	if got := selectionReason(2, selected, peers); got != "selected_udp_bulk_path" {
+		t.Fatalf("expected bulk topology reason, got %s", got)
+	}
+}
+
+func TestSelectionReasonMarksTCPOverFallbackUDP(t *testing.T) {
+	selected := scheduler.PeerCandidate{
+		PeerID:           "tcp://backup",
+		Transport:        "tcp",
+		Score:            1.0,
+		PeerTopologyRole: peerTopologyRoleBackup,
+		HaveRanges:       []core.HaveRange{{Start: 0, End: 5}},
+	}
+	peers := []scheduler.PeerCandidate{
+		selected,
+		{
+			PeerID:           "udp://fallback",
+			Transport:        "udp",
+			Score:            1.20,
+			PeerTopologyRole: peerTopologyRoleFallback,
+			HaveRanges:       []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	if got := selectionReason(2, selected, peers); got != "selected_tcp_over_fallback_udp" {
+		t.Fatalf("expected tcp over fallback udp reason, got %s", got)
+	}
+}
+
 func TestSelectionReasonMarksTCPOverWeakUDPChunkProgress(t *testing.T) {
 	selected := scheduler.PeerCandidate{
 		PeerID:     "tcp://steady",

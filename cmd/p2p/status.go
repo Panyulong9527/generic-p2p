@@ -129,11 +129,12 @@ func printPrettyStatus(status core.StoreStatus) {
 			if decision.TopUDPPeerID != "" {
 				if decision.SelectedTransport == "udp" {
 					fmt.Printf(
-						"  piece=%d selected=%s(%s score=%.2f burst=%s stage=%s risk=%s budget=%d timeout=%dms) topUdp=%s(score=%.2f) reason=%s at=%s\n",
+						"  piece=%d selected=%s(%s score=%.2f role=%s burst=%s stage=%s risk=%s budget=%d timeout=%dms) topUdp=%s(score=%.2f role=%s) reason=%s at=%s\n",
 						decision.PieceIndex,
 						decision.SelectedPeerID,
 						decision.SelectedTransport,
 						decision.SelectedScore,
+						emptyDashStatus(decision.SelectedTopologyRole),
 						emptyDashStatus(decision.SelectedBurstProfile),
 						emptyDashStatus(decision.SelectedLastStage),
 						emptyDashStatus(decision.SelectedUDPDecisionRisk),
@@ -141,19 +142,22 @@ func printPrettyStatus(status core.StoreStatus) {
 						decision.SelectedUDPTimeoutMs,
 						decision.TopUDPPeerID,
 						decision.TopUDPScore,
+						emptyDashStatus(decision.TopUDPTopologyRole),
 						decision.Reason,
 						decision.RecordedAt,
 					)
 					continue
 				}
 				fmt.Printf(
-					"  piece=%d selected=%s(%s score=%.2f) topUdp=%s(score=%.2f) reason=%s at=%s\n",
+					"  piece=%d selected=%s(%s score=%.2f role=%s) topUdp=%s(score=%.2f role=%s) reason=%s at=%s\n",
 					decision.PieceIndex,
 					decision.SelectedPeerID,
 					decision.SelectedTransport,
 					decision.SelectedScore,
+					emptyDashStatus(decision.SelectedTopologyRole),
 					decision.TopUDPPeerID,
 					decision.TopUDPScore,
+					emptyDashStatus(decision.TopUDPTopologyRole),
 					decision.Reason,
 					decision.RecordedAt,
 				)
@@ -161,11 +165,12 @@ func printPrettyStatus(status core.StoreStatus) {
 			}
 			if decision.SelectedTransport == "udp" {
 				fmt.Printf(
-					"  piece=%d selected=%s(%s score=%.2f burst=%s stage=%s risk=%s budget=%d timeout=%dms) reason=%s at=%s\n",
+					"  piece=%d selected=%s(%s score=%.2f role=%s burst=%s stage=%s risk=%s budget=%d timeout=%dms) reason=%s at=%s\n",
 					decision.PieceIndex,
 					decision.SelectedPeerID,
 					decision.SelectedTransport,
 					decision.SelectedScore,
+					emptyDashStatus(decision.SelectedTopologyRole),
 					emptyDashStatus(decision.SelectedBurstProfile),
 					emptyDashStatus(decision.SelectedLastStage),
 					emptyDashStatus(decision.SelectedUDPDecisionRisk),
@@ -177,11 +182,12 @@ func printPrettyStatus(status core.StoreStatus) {
 				continue
 			}
 			fmt.Printf(
-				"  piece=%d selected=%s(%s score=%.2f) reason=%s at=%s\n",
+				"  piece=%d selected=%s(%s score=%.2f role=%s) reason=%s at=%s\n",
 				decision.PieceIndex,
 				decision.SelectedPeerID,
 				decision.SelectedTransport,
 				decision.SelectedScore,
+				emptyDashStatus(decision.SelectedTopologyRole),
 				decision.Reason,
 				decision.RecordedAt,
 			)
