@@ -223,6 +223,64 @@ func TestChoosePeerDoesNotPreferPublicMappedUDPWhenRiskIsSuppressed(t *testing.T
 	}
 }
 
+func TestChoosePeerPrefersHealthyUDPChunkProgressWhenScoresAreClose(t *testing.T) {
+	s := Scheduler{}
+	peers := []PeerCandidate{
+		{
+			PeerID:               "udp-healthy",
+			Transport:            "udp",
+			Score:                1.08,
+			UDPChunkSamples:      3,
+			UDPChunkReceiveRatio: 0.95,
+			UDPChunkCompleteRate: 0.8,
+			HaveRanges:           []core.HaveRange{{Start: 0, End: 5}},
+		},
+		{
+			PeerID:     "tcp-steady",
+			Transport:  "tcp",
+			Score:      1.0,
+			HaveRanges: []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	peer, ok := s.ChoosePeer(2, peers)
+	if !ok {
+		t.Fatal("expected to select a peer")
+	}
+	if peer.PeerID != "udp-healthy" {
+		t.Fatalf("expected healthy udp chunk path to win close score race, got %s", peer.PeerID)
+	}
+}
+
+func TestChoosePeerPrefersTCPOverWeakUDPChunkProgressWhenScoresAreClose(t *testing.T) {
+	s := Scheduler{}
+	peers := []PeerCandidate{
+		{
+			PeerID:               "udp-weak",
+			Transport:            "udp",
+			Score:                1.12,
+			UDPChunkSamples:      3,
+			UDPChunkReceiveRatio: 0.25,
+			UDPChunkCompleteRate: 0.1,
+			HaveRanges:           []core.HaveRange{{Start: 0, End: 5}},
+		},
+		{
+			PeerID:     "tcp-steady",
+			Transport:  "tcp",
+			Score:      1.0,
+			HaveRanges: []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	peer, ok := s.ChoosePeer(2, peers)
+	if !ok {
+		t.Fatal("expected to select a peer")
+	}
+	if peer.PeerID != "tcp-steady" {
+		t.Fatalf("expected tcp peer to win over weak udp chunk path, got %s", peer.PeerID)
+	}
+}
+
 func TestChoosePiecePrefersRarestAvailable(t *testing.T) {
 	s := Scheduler{}
 	peers := []PeerCandidate{

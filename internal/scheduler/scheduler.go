@@ -3,16 +3,20 @@ package scheduler
 import "generic-p2p/internal/core"
 
 type PeerCandidate struct {
-	PeerID          string
-	Addr            string
-	Transport       string
-	IsLAN           bool
-	Score           float64
-	BurstProfile    string
-	UDPDecisionRisk string
-	UDPPublicMapped bool
-	HaveRanges      []core.HaveRange
-	PendingCount    int
+	PeerID               string
+	Addr                 string
+	Transport            string
+	IsLAN                bool
+	Score                float64
+	BurstProfile         string
+	UDPDecisionRisk      string
+	UDPPublicMapped      bool
+	UDPChunkSamples      int
+	UDPChunkReceiveRatio float64
+	UDPChunkCompleteRate float64
+	UDPChunkDurationMs   int64
+	HaveRanges           []core.HaveRange
+	PendingCount         int
 }
 
 type Scheduler struct{}
@@ -74,6 +78,18 @@ func betterPeer(candidate PeerCandidate, current PeerCandidate) bool {
 		return true
 	}
 	if preferCurrentByPublicMappedUDP(candidate, current) {
+		return false
+	}
+	if preferCandidateByChunkHealthyUDP(candidate, current) {
+		return true
+	}
+	if preferCurrentByChunkHealthyUDP(candidate, current) {
+		return false
+	}
+	if preferCandidateByChunkWeakness(candidate, current) {
+		return true
+	}
+	if preferCurrentByChunkWeakness(candidate, current) {
 		return false
 	}
 	if preferCandidateByTransportRisk(candidate, current) {
@@ -149,5 +165,68 @@ func publicMappedUDPPreferenceMargin(candidate PeerCandidate) float64 {
 		return 0.18
 	default:
 		return 0.12
+	}
+}
+
+func preferCandidateByChunkHealthyUDP(candidate PeerCandidate, current PeerCandidate) bool {
+	return candidate.Transport == "udp" &&
+		current.Transport == "tcp" &&
+		!isSuppressedUDPRisk(candidate.UDPDecisionRisk) &&
+		udpChunkLooksHealthy(candidate) &&
+		candidate.Score >= current.Score-udpChunkHealthyPreferenceMargin(candidate)
+}
+
+func preferCurrentByChunkHealthyUDP(candidate PeerCandidate, current PeerCandidate) bool {
+	return current.Transport == "udp" &&
+		candidate.Transport == "tcp" &&
+		!isSuppressedUDPRisk(current.UDPDecisionRisk) &&
+		udpChunkLooksHealthy(current) &&
+		current.Score >= candidate.Score-udpChunkHealthyPreferenceMargin(current)
+}
+
+func preferCandidateByChunkWeakness(candidate PeerCandidate, current PeerCandidate) bool {
+	return candidate.Transport == "tcp" &&
+		current.Transport == "udp" &&
+		udpChunkLooksWeak(current) &&
+		candidate.Score >= current.Score-udpChunkWeakTCPPreferenceMargin(current)
+}
+
+func preferCurrentByChunkWeakness(candidate PeerCandidate, current PeerCandidate) bool {
+	return current.Transport == "tcp" &&
+		candidate.Transport == "udp" &&
+		udpChunkLooksWeak(candidate) &&
+		current.Score >= candidate.Score-udpChunkWeakTCPPreferenceMargin(candidate)
+}
+
+func udpChunkLooksHealthy(candidate PeerCandidate) bool {
+	return candidate.UDPChunkSamples >= 2 &&
+		candidate.UDPChunkCompleteRate >= 0.65 &&
+		candidate.UDPChunkReceiveRatio >= 0.82
+}
+
+func udpChunkLooksWeak(candidate PeerCandidate) bool {
+	return candidate.UDPChunkSamples >= 2 &&
+		candidate.UDPChunkReceiveRatio < 0.4
+}
+
+func udpChunkHealthyPreferenceMargin(candidate PeerCandidate) float64 {
+	switch candidate.UDPDecisionRisk {
+	case "stable":
+		return 0.22
+	case "recovering":
+		return 0.14
+	default:
+		return 0.10
+	}
+}
+
+func udpChunkWeakTCPPreferenceMargin(candidate PeerCandidate) float64 {
+	switch candidate.UDPDecisionRisk {
+	case "low":
+		return 0.28
+	case "warn":
+		return 0.18
+	default:
+		return 0.14
 	}
 }

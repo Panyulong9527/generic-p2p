@@ -337,6 +337,56 @@ func TestSelectionReasonSkipsPublicMappedReasonForSuppressedRisk(t *testing.T) {
 	}
 }
 
+func TestSelectionReasonMarksChunkProgressCloseScorePreference(t *testing.T) {
+	selected := scheduler.PeerCandidate{
+		PeerID:               "udp://healthy",
+		Transport:            "udp",
+		Score:                1.08,
+		UDPChunkSamples:      3,
+		UDPChunkReceiveRatio: 0.92,
+		UDPChunkCompleteRate: 0.8,
+		HaveRanges:           []core.HaveRange{{Start: 0, End: 5}},
+	}
+	peers := []scheduler.PeerCandidate{
+		selected,
+		{
+			PeerID:     "tcp://steady",
+			Transport:  "tcp",
+			Score:      1.0,
+			HaveRanges: []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	if got := selectionReason(2, selected, peers); got != "selected_udp_chunk_progress_close_score" {
+		t.Fatalf("expected chunk-progress close-score reason, got %s", got)
+	}
+}
+
+func TestSelectionReasonMarksTCPOverWeakUDPChunkProgress(t *testing.T) {
+	selected := scheduler.PeerCandidate{
+		PeerID:     "tcp://steady",
+		Transport:  "tcp",
+		Score:      1.0,
+		HaveRanges: []core.HaveRange{{Start: 0, End: 5}},
+	}
+	peers := []scheduler.PeerCandidate{
+		selected,
+		{
+			PeerID:               "udp://weak",
+			Transport:            "udp",
+			Score:                1.12,
+			UDPChunkSamples:      3,
+			UDPChunkReceiveRatio: 0.25,
+			UDPChunkCompleteRate: 0.1,
+			HaveRanges:           []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	if got := selectionReason(2, selected, peers); got != "selected_tcp_over_weak_udp_progress" {
+		t.Fatalf("expected weak-udp-progress tcp reason, got %s", got)
+	}
+}
+
 func TestUDPPieceChunkWindowVariesByProfile(t *testing.T) {
 	if got := udpPieceChunkWindowForCandidate("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "warm"}); got != 5 {
 		t.Fatalf("expected warm chunk window 5, got %d", got)

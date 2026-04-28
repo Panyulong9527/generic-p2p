@@ -149,6 +149,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 			_ = runtime.SetPeers(len(peerCandidates))
 			syncRuntimeUDPBurstProfiles(logger, store, discovery, manifest.ContentID, udpBurstReports)
 		}
+		peerCandidates = annotateUDPChunkProgress(peerCandidates, manifest.ContentID, time.Now())
 
 		selected, ok := chooser.ChoosePeer(pieceIndex, peerCandidates)
 		if !ok {
@@ -696,6 +697,35 @@ func recordUDPChunkProgress(contentID string, peerID string, stats p2pnet.UDPPie
 	recordUDPChunkProgressEWMA(key, stats, now)
 }
 
+func annotateUDPChunkProgress(candidates []scheduler.PeerCandidate, contentID string, now time.Time) []scheduler.PeerCandidate {
+	if len(candidates) == 0 {
+		return candidates
+	}
+	annotated := make([]scheduler.PeerCandidate, len(candidates))
+	copy(annotated, candidates)
+	for i := range annotated {
+		if annotated[i].Transport != "udp" {
+			continue
+		}
+		if smoothed, ok := smoothedUDPChunkProgress(contentID, annotated[i].PeerID, now); ok {
+			annotated[i].UDPChunkSamples = smoothed.Samples
+			annotated[i].UDPChunkReceiveRatio = smoothed.ReceiveRatio
+			annotated[i].UDPChunkCompleteRate = smoothed.CompleteRate
+			annotated[i].UDPChunkDurationMs = int64(smoothed.DurationMs)
+			continue
+		}
+		if sample, ok := recentUDPChunkProgress(contentID, annotated[i].PeerID, now); ok {
+			annotated[i].UDPChunkSamples = 1
+			annotated[i].UDPChunkReceiveRatio = udpChunkReceiveRatio(sample)
+			if sample.Completed {
+				annotated[i].UDPChunkCompleteRate = 1
+			}
+			annotated[i].UDPChunkDurationMs = sample.Duration.Milliseconds()
+		}
+	}
+	return annotated
+}
+
 func recentUDPChunkProgress(contentID string, peerID string, now time.Time) (udpChunkProgressSample, bool) {
 	if strings.TrimSpace(contentID) == "" || strings.TrimSpace(peerID) == "" {
 		return udpChunkProgressSample{}, false
@@ -866,6 +896,9 @@ func selectionReason(pieceIndex int, selected scheduler.PeerCandidate, peerCandi
 		if selected.UDPPublicMapped && selectedByPublicMappedPreference(pieceIndex, selected, peerCandidates) {
 			return "selected_udp_public_mapped_close_score"
 		}
+		if selectedByChunkProgressPreference(pieceIndex, selected, peerCandidates) {
+			return "selected_udp_chunk_progress_close_score"
+		}
 		switch strings.TrimSpace(selected.UDPDecisionRisk) {
 		case "low":
 			return "selected_udp_despite_low_value_risk"
@@ -879,6 +912,9 @@ func selectionReason(pieceIndex int, selected scheduler.PeerCandidate, peerCandi
 		return "selected_udp_best_score"
 	}
 	if topUDP, ok := topUDPCandidateForPiece(pieceIndex, peerCandidates); ok {
+		if topUDPRejectedByWeakChunkProgress(pieceIndex, selected, topUDP, peerCandidates) {
+			return "selected_tcp_over_weak_udp_progress"
+		}
 		switch strings.TrimSpace(topUDP.UDPDecisionRisk) {
 		case "low":
 			return "selected_tcp_over_low_value_udp"
@@ -912,6 +948,45 @@ func selectedByPublicMappedPreference(pieceIndex int, selected scheduler.PeerCan
 	return false
 }
 
+func selectedByChunkProgressPreference(pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) bool {
+	if selected.Transport != "udp" || isSuppressedDecisionRisk(selected.UDPDecisionRisk) || selected.UDPChunkSamples < 2 {
+		return false
+	}
+	if selected.UDPChunkCompleteRate < 0.65 || selected.UDPChunkReceiveRatio < 0.82 {
+		return false
+	}
+	margin := chunkProgressDecisionMargin(selected)
+	for _, candidate := range peerCandidates {
+		if candidate.Transport != "tcp" {
+			continue
+		}
+		if pieceIndex >= 0 && !core.ContainsPiece(candidate.HaveRanges, pieceIndex) {
+			continue
+		}
+		if candidate.Score >= selected.Score-margin {
+			return true
+		}
+	}
+	return false
+}
+
+func topUDPRejectedByWeakChunkProgress(pieceIndex int, selected scheduler.PeerCandidate, topUDP scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) bool {
+	if selected.Transport != "tcp" || topUDP.Transport != "udp" || topUDP.UDPChunkSamples < 2 || topUDP.UDPChunkReceiveRatio >= 0.4 {
+		return false
+	}
+	margin := weakChunkTCPDecisionMargin(topUDP)
+	for _, candidate := range peerCandidates {
+		if candidate.PeerID != selected.PeerID || candidate.Transport != "tcp" {
+			continue
+		}
+		if pieceIndex >= 0 && !core.ContainsPiece(candidate.HaveRanges, pieceIndex) {
+			continue
+		}
+		return candidate.Score >= topUDP.Score-margin
+	}
+	return false
+}
+
 func isSuppressedDecisionRisk(risk string) bool {
 	switch strings.TrimSpace(risk) {
 	case "low", "warn":
@@ -929,6 +1004,28 @@ func publicMappedDecisionMargin(risk string) float64 {
 		return 0.18
 	default:
 		return 0.12
+	}
+}
+
+func chunkProgressDecisionMargin(candidate scheduler.PeerCandidate) float64 {
+	switch strings.TrimSpace(candidate.UDPDecisionRisk) {
+	case "stable":
+		return 0.22
+	case "recovering":
+		return 0.14
+	default:
+		return 0.10
+	}
+}
+
+func weakChunkTCPDecisionMargin(candidate scheduler.PeerCandidate) float64 {
+	switch strings.TrimSpace(candidate.UDPDecisionRisk) {
+	case "low":
+		return 0.28
+	case "warn":
+		return 0.18
+	default:
+		return 0.14
 	}
 }
 
