@@ -12,6 +12,11 @@ type udpPeerSession struct {
 	PrimaryAddr      string
 	Addresses        map[string]time.Time
 	State            string
+	HealthScore      float64
+	LastStage        string
+	LastErrorKind    string
+	SuccessStreak    int
+	FailureStreak    int
 	LastActiveAt     time.Time
 	LastSuccessAt    time.Time
 	LastFailureAt    time.Time
@@ -61,6 +66,22 @@ func noteUDPSessionAddr(peerID string, remoteAddr string, source string, content
 }
 
 func noteUDPSessionSuccess(peerID string, remoteAddr string, contentID string, now time.Time) {
+	noteUDPSessionEvent(peerID, remoteAddr, "unknown", true, "", contentID, now)
+}
+
+func noteUDPSessionFailure(peerID string, remoteAddr string, now time.Time) {
+	noteUDPSessionEvent(peerID, remoteAddr, "unknown", false, "", "", now)
+}
+
+func noteUDPSessionStageSuccess(peerID string, remoteAddr string, stage string, contentID string, now time.Time) {
+	noteUDPSessionEvent(peerID, remoteAddr, stage, true, "", contentID, now)
+}
+
+func noteUDPSessionStageFailure(peerID string, remoteAddr string, stage string, errorKind string, now time.Time) {
+	noteUDPSessionEvent(peerID, remoteAddr, stage, false, errorKind, "", now)
+}
+
+func noteUDPSessionEvent(peerID string, remoteAddr string, stage string, success bool, errorKind string, contentID string, now time.Time) {
 	peerID = strings.TrimSpace(peerID)
 	remoteAddr = strings.TrimSpace(remoteAddr)
 	if peerID == "" {
@@ -82,38 +103,25 @@ func noteUDPSessionSuccess(peerID string, remoteAddr string, contentID string, n
 		session.Addresses[remoteAddr] = now
 		session.PrimaryAddr = remoteAddr
 	}
-	session.LastSuccessAt = now
+	session.LastStage = strings.TrimSpace(stage)
+	if success {
+		session.LastSuccessAt = now
+		session.SuccessStreak++
+		session.FailureStreak = 0
+		session.LastErrorKind = ""
+		session.HealthScore = clampUDPSessionHealth(session.HealthScore + udpSessionStageDelta(stage, true))
+	} else {
+		session.LastFailureAt = now
+		session.FailureStreak++
+		session.SuccessStreak = 0
+		session.LastErrorKind = strings.TrimSpace(errorKind)
+		session.HealthScore = clampUDPSessionHealth(session.HealthScore + udpSessionStageDelta(stage, false))
+	}
 	session.LastActiveAt = now
 	session.State = udpSessionStateKind(session, now)
 	if strings.TrimSpace(contentID) != "" {
 		session.RecentContentIDs[strings.TrimSpace(contentID)] = now
 	}
-	udpSessionState.sessions[peerID] = session
-}
-
-func noteUDPSessionFailure(peerID string, remoteAddr string, now time.Time) {
-	peerID = strings.TrimSpace(peerID)
-	if peerID == "" {
-		return
-	}
-
-	udpSessionState.mu.Lock()
-	defer udpSessionState.mu.Unlock()
-
-	session := udpSessionState.sessions[peerID]
-	session.PeerID = peerID
-	if session.Addresses == nil {
-		session.Addresses = make(map[string]time.Time)
-	}
-	if remoteAddr = strings.TrimSpace(remoteAddr); remoteAddr != "" {
-		session.Addresses[remoteAddr] = now
-		if session.PrimaryAddr == "" {
-			session.PrimaryAddr = remoteAddr
-		}
-	}
-	session.LastFailureAt = now
-	session.LastActiveAt = maxSessionTime(session.LastActiveAt, now)
-	session.State = udpSessionStateKind(session, now)
 	udpSessionState.sessions[peerID] = session
 }
 
@@ -221,6 +229,9 @@ func udpSessionDiscoveryBias(contentID string, peerID string, now time.Time) flo
 	}
 	switch udpSessionStateKind(session, now) {
 	case "active":
+		if session.HealthScore >= 0.45 {
+			return 0.12
+		}
 		return 0.10
 	case "warm":
 		return 0.05
@@ -357,8 +368,15 @@ func udpSessionStateForPeer(peerID string, now time.Time) string {
 }
 
 func udpSessionWindowBias(peerID string, now time.Time) int {
-	switch udpSessionStateForPeer(peerID, now) {
+	session, ok := udpSessionSnapshot(peerID, now)
+	if !ok {
+		return 0
+	}
+	switch udpSessionStateKind(session, now) {
 	case "active":
+		if session.HealthScore >= 0.45 {
+			return 2
+		}
 		return 1
 	case "cooling":
 		return -1
@@ -368,8 +386,15 @@ func udpSessionWindowBias(peerID string, now time.Time) int {
 }
 
 func udpSessionRoundTimeoutBias(peerID string, now time.Time) time.Duration {
-	switch udpSessionStateForPeer(peerID, now) {
+	session, ok := udpSessionSnapshot(peerID, now)
+	if !ok {
+		return 0
+	}
+	switch udpSessionStateKind(session, now) {
 	case "active":
+		if session.HealthScore >= 0.45 {
+			return -200 * time.Millisecond
+		}
 		return -150 * time.Millisecond
 	case "warm":
 		return -50 * time.Millisecond
@@ -381,8 +406,15 @@ func udpSessionRoundTimeoutBias(peerID string, now time.Time) time.Duration {
 }
 
 func udpSessionAttemptBudgetBias(peerID string, now time.Time) int {
-	switch udpSessionStateForPeer(peerID, now) {
+	session, ok := udpSessionSnapshot(peerID, now)
+	if !ok {
+		return 0
+	}
+	switch udpSessionStateKind(session, now) {
 	case "active":
+		if session.HealthScore >= 0.45 {
+			return 2
+		}
 		return 1
 	case "cooling":
 		return -1
@@ -418,16 +450,52 @@ func cloneUDPSession(session udpPeerSession) udpPeerSession {
 }
 
 func udpSessionStateKind(session udpPeerSession, now time.Time) string {
-	if !session.LastFailureAt.IsZero() && session.LastFailureAt.After(session.LastSuccessAt) && now.Sub(session.LastFailureAt) <= 25*time.Second {
+	if session.FailureStreak >= 2 && now.Sub(session.LastFailureAt) <= 35*time.Second {
 		return "cooling"
 	}
-	if !session.LastSuccessAt.IsZero() && now.Sub(session.LastSuccessAt) <= 20*time.Second {
+	if session.HealthScore <= -0.2 && !session.LastFailureAt.IsZero() && now.Sub(session.LastFailureAt) <= 25*time.Second {
+		return "cooling"
+	}
+	if !session.LastFailureAt.IsZero() && session.LastFailureAt.After(session.LastSuccessAt) && now.Sub(session.LastFailureAt) <= 25*time.Second && session.HealthScore < 0 {
+		return "cooling"
+	}
+	if !session.LastSuccessAt.IsZero() && now.Sub(session.LastSuccessAt) <= 20*time.Second && session.HealthScore >= 0.08 {
 		return "active"
 	}
 	if !session.LastSuccessAt.IsZero() && now.Sub(session.LastSuccessAt) <= 90*time.Second {
 		return "warm"
 	}
 	return "idle"
+}
+
+func udpSessionStageDelta(stage string, success bool) float64 {
+	var delta float64
+	switch strings.TrimSpace(stage) {
+	case "piece":
+		delta = 0.25
+	case "have":
+		delta = 0.18
+	case "probe":
+		delta = 0.14
+	case "keepalive":
+		delta = 0.10
+	default:
+		delta = 0.10
+	}
+	if success {
+		return delta
+	}
+	return -(delta * 1.2)
+}
+
+func clampUDPSessionHealth(value float64) float64 {
+	if value > 1 {
+		return 1
+	}
+	if value < -1 {
+		return -1
+	}
+	return value
 }
 
 func maxSessionTime(left time.Time, right time.Time) time.Time {

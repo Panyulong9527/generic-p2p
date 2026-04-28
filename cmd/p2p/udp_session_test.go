@@ -83,3 +83,49 @@ func TestUDPSessionStateTransitions(t *testing.T) {
 		t.Fatalf("expected cooling session state, got %s", got)
 	}
 }
+
+func TestUDPSessionHealthTracksStageEvents(t *testing.T) {
+	now := time.Now()
+	peerID := "udp://session-health-stage"
+
+	noteUDPSessionStageSuccess(peerID, "198.51.100.61:9003", "probe", "sha256-demo", now.Add(-12*time.Second))
+	noteUDPSessionStageSuccess(peerID, "198.51.100.61:9003", "have", "sha256-demo", now.Add(-8*time.Second))
+	noteUDPSessionStageSuccess(peerID, "198.51.100.61:9003", "piece", "sha256-demo", now.Add(-4*time.Second))
+
+	session, ok := udpSessionSnapshot(peerID, now)
+	if !ok {
+		t.Fatal("expected session snapshot")
+	}
+	if session.HealthScore <= 0.4 {
+		t.Fatalf("expected positive health score after staged successes, got %.2f", session.HealthScore)
+	}
+	if session.LastStage != "piece" {
+		t.Fatalf("expected last stage piece, got %s", session.LastStage)
+	}
+	if session.State != "active" {
+		t.Fatalf("expected active state after staged successes, got %s", session.State)
+	}
+}
+
+func TestUDPSessionHealthCoolsAfterRepeatedFailures(t *testing.T) {
+	now := time.Now()
+	peerID := "udp://session-health-cooling"
+
+	noteUDPSessionStageSuccess(peerID, "198.51.100.62:9003", "piece", "sha256-demo", now.Add(-20*time.Second))
+	noteUDPSessionStageFailure(peerID, "198.51.100.62:9003", "keepalive", "udp_timeout", now.Add(-6*time.Second))
+	noteUDPSessionStageFailure(peerID, "198.51.100.62:9003", "probe", "udp_timeout", now.Add(-2*time.Second))
+
+	session, ok := udpSessionSnapshot(peerID, now)
+	if !ok {
+		t.Fatal("expected session snapshot")
+	}
+	if session.HealthScore >= 0 {
+		t.Fatalf("expected negative health after repeated failures, got %.2f", session.HealthScore)
+	}
+	if session.State != "cooling" {
+		t.Fatalf("expected cooling state after repeated failures, got %s", session.State)
+	}
+	if session.LastErrorKind != "udp_timeout" {
+		t.Fatalf("expected last error kind udp_timeout, got %s", session.LastErrorKind)
+	}
+}

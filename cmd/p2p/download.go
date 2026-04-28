@@ -179,7 +179,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 			if lastErr != nil {
 				if candidate.Transport == "udp" {
 					recordUDPBurstOutcome(manifest.ContentID, candidate.PeerID, normalizedBurstProfile(candidate.BurstProfile), "piece", false, time.Now())
-					noteUDPSessionFailure(candidate.PeerID, candidate.Addr, time.Now())
+					noteUDPSessionStageFailure(candidate.PeerID, candidate.Addr, "piece", transferErrorKind(candidate, lastErr), time.Now())
 				}
 				errorKind := transferErrorKind(candidate, lastErr)
 				cooldown := peerHealth.MarkFailureKind(candidate.PeerID, errorKind, time.Now())
@@ -205,7 +205,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 			if candidate.Transport == "udp" {
 				recordUDPBurstOutcome(manifest.ContentID, candidate.PeerID, normalizedBurstProfile(candidate.BurstProfile), "piece", true, time.Now())
 				p2pnet.RememberRecentUDPSuccess(manifest.ContentID, candidate.Addr, time.Now())
-				noteUDPSessionSuccess(candidate.PeerID, candidate.Addr, manifest.ContentID, time.Now())
+				noteUDPSessionStageSuccess(candidate.PeerID, candidate.Addr, "piece", manifest.ContentID, time.Now())
 			}
 			break
 		}

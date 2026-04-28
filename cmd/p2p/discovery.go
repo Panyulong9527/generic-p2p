@@ -181,7 +181,7 @@ func maybeRequesterSideBurstPunch(logger *logging.Logger, contentID string, peer
 				WithLocalAddr(selfUDPListenAddr).
 				ProbeMultiBurstForPeer(contentID, peer.PeerID, phases); err != nil {
 				recordUDPBurstOutcome(contentID, peer.PeerID, profile, "probe", false, time.Now())
-				noteUDPSessionFailure(peer.PeerID, target, time.Now())
+				noteUDPSessionStageFailure(peer.PeerID, target, "probe", udpDiscoveryErrorKind(err), time.Now())
 				logger.Info("tracker_udp_requester_burst_probe_failed",
 					"contentId", contentID,
 					"peerId", peer.PeerID,
@@ -192,7 +192,7 @@ func maybeRequesterSideBurstPunch(logger *logging.Logger, contentID string, peer
 				continue
 			}
 			recordUDPBurstOutcome(contentID, peer.PeerID, profile, "probe", true, time.Now())
-			noteUDPSessionSuccess(peer.PeerID, target, contentID, time.Now())
+			noteUDPSessionStageSuccess(peer.PeerID, target, "probe", contentID, time.Now())
 			logger.Info("tracker_udp_requester_burst_probe_sent",
 				"contentId", contentID,
 				"peerId", peer.PeerID,
@@ -667,7 +667,7 @@ func maybeKeepAliveUDPPath(logger *logging.Logger, contentID string, peerID stri
 	}
 	go func() {
 		if err := p2pnet.NewUDPClient(remoteAddr, 1500*time.Millisecond).WithLocalAddr(selfUDPListenAddr).ProbeForPeer(contentID, peerID); err != nil {
-			noteUDPSessionFailure(peerID, remoteAddr, time.Now())
+			noteUDPSessionStageFailure(peerID, remoteAddr, "keepalive", udpDiscoveryErrorKind(err), time.Now())
 			reportTrackerUDPKeepalive(logger, trackerURL, "udp://"+remoteAddr, contentID, false, udpDiscoveryErrorKind(err))
 			logger.Info("udp_keepalive_failed",
 				"contentId", contentID,
@@ -677,7 +677,7 @@ func maybeKeepAliveUDPPath(logger *logging.Logger, contentID string, peerID stri
 			)
 			return
 		}
-		noteUDPSessionSuccess(peerID, remoteAddr, contentID, time.Now())
+		noteUDPSessionStageSuccess(peerID, remoteAddr, "keepalive", contentID, time.Now())
 		reportTrackerUDPKeepalive(logger, trackerURL, "udp://"+remoteAddr, contentID, true, "")
 		logger.Info("udp_keepalive_sent",
 			"contentId", contentID,
@@ -783,7 +783,7 @@ func keepAliveRecentUDPSuccesses(logger *logging.Logger, contentID string, track
 		}
 		go func(remote string) {
 			if err := p2pnet.NewUDPClient(remote, 1200*time.Millisecond).WithLocalAddr(selfUDPListenAddr).Probe(); err != nil {
-				noteUDPSessionFailure("udp://"+remote, remote, time.Now())
+				noteUDPSessionStageFailure("udp://"+remote, remote, "keepalive", udpDiscoveryErrorKind(err), time.Now())
 				reportTrackerUDPKeepalive(logger, trackerURL, "udp://"+remote, contentID, false, udpDiscoveryErrorKind(err))
 				logger.Info("udp_success_keepalive_failed",
 					"contentId", contentID,
@@ -792,7 +792,7 @@ func keepAliveRecentUDPSuccesses(logger *logging.Logger, contentID string, track
 				)
 				return
 			}
-			noteUDPSessionSuccess("udp://"+remote, remote, contentID, time.Now())
+			noteUDPSessionStageSuccess("udp://"+remote, remote, "keepalive", contentID, time.Now())
 			reportTrackerUDPKeepalive(logger, trackerURL, "udp://"+remote, contentID, true, "")
 			logger.Info("udp_success_keepalive_sent",
 				"contentId", contentID,
@@ -813,7 +813,7 @@ func keepAliveUDPSessions(logger *logging.Logger, contentID string, trackerURL s
 		}
 		go func(peerID string, remote string) {
 			if err := p2pnet.NewUDPClient(remote, 1200*time.Millisecond).WithLocalAddr(selfUDPListenAddr).ProbeForPeer(contentID, peerID); err != nil {
-				noteUDPSessionFailure(peerID, remote, time.Now())
+				noteUDPSessionStageFailure(peerID, remote, "keepalive", udpDiscoveryErrorKind(err), time.Now())
 				reportTrackerUDPKeepalive(logger, trackerURL, peerID, contentID, false, udpDiscoveryErrorKind(err))
 				logger.Info("udp_session_keepalive_failed",
 					"contentId", contentID,
@@ -823,7 +823,7 @@ func keepAliveUDPSessions(logger *logging.Logger, contentID string, trackerURL s
 				)
 				return
 			}
-			noteUDPSessionSuccess(peerID, remote, contentID, time.Now())
+			noteUDPSessionStageSuccess(peerID, remote, "keepalive", contentID, time.Now())
 			reportTrackerUDPKeepalive(logger, trackerURL, peerID, contentID, true, "")
 			logger.Info("udp_session_keepalive_sent",
 				"contentId", contentID,
@@ -893,7 +893,7 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 		} else {
 			if err := probeClient.Probe(); err != nil {
 				recordUDPBurstOutcome(contentID, peerID, normalizedBurstProfile(burstProfile), "probe", false, time.Now())
-				noteUDPSessionFailure(peerID, addr, time.Now())
+				noteUDPSessionStageFailure(peerID, addr, "probe", udpDiscoveryErrorKind(err), time.Now())
 				udpProbes.Store(addr, false, now)
 				var cooldown time.Duration
 				if peerHealth != nil {
@@ -909,7 +909,7 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 				continue
 			}
 			recordUDPBurstOutcome(contentID, peerID, normalizedBurstProfile(burstProfile), "probe", true, time.Now())
-			noteUDPSessionSuccess(peerID, addr, contentID, time.Now())
+			noteUDPSessionStageSuccess(peerID, addr, "probe", contentID, time.Now())
 			udpProbes.Store(addr, true, now)
 			logger.Info("udp_peer_probe_ok", "contentId", contentID, "peer", peerID)
 		}
@@ -917,9 +917,9 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 		haveRanges, err := haveClient.FetchHave(contentID)
 		if err != nil {
 			recordUDPBurstOutcome(contentID, peerID, normalizedBurstProfile(burstProfile), "have", false, time.Now())
-			noteUDPSessionFailure(peerID, addr, time.Now())
 			var cooldown time.Duration
 			errorKind := udpDiscoveryErrorKind(err)
+			noteUDPSessionStageFailure(peerID, addr, "have", errorKind, time.Now())
 			if peerHealth != nil {
 				cooldown = peerHealth.MarkFailureKind(peerID, errorKind, time.Now())
 			}
@@ -933,7 +933,7 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 			continue
 		}
 		recordUDPBurstOutcome(contentID, peerID, normalizedBurstProfile(burstProfile), "have", true, time.Now())
-		noteUDPSessionSuccess(peerID, addr, contentID, time.Now())
+		noteUDPSessionStageSuccess(peerID, addr, "have", contentID, time.Now())
 		if peerHealth != nil {
 			peerHealth.MarkSuccess(peerID)
 		}
