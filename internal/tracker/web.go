@@ -780,6 +780,7 @@ const webAppHTML = `<!doctype html>
       );
       const routeDriftSummary = summarizeRouteDrift(swarms, udpProbeResultMap, peerTransferPathMap);
       const fallbackSummary = summarizeFallbackActive(swarms, udpProbeResultMap, peerTransferPathMap, udpKeepaliveResultMap);
+      const udpDecisionRiskSummary = summarizeUDPDecisionRisk(swarms, udpProbeResultMap, peerTransferPathMap, udpDecisionMap);
       const swarmHTML = swarms.length
         ? swarms.map((swarm) =>
           (() => {
@@ -902,6 +903,11 @@ const webAppHTML = `<!doctype html>
           '<div class="metric"><strong>' + countUDPDecisionsByStage(udpDecisions, "probe") + '</strong><span>probe-limited</span></div>' +
         '</div>' +
         '<div class="metric-row">' +
+          '<div class="metric"><strong>' + udpDecisionRiskSummary.lowValue + '</strong><span>low-value udp targets</span></div>' +
+          '<div class="metric"><strong>' + udpDecisionRiskSummary.recovering + '</strong><span>recovering udp targets</span></div>' +
+          '<div class="metric"><strong>' + udpDecisionRiskSummary.stable + '</strong><span>stable udp targets</span></div>' +
+        '</div>' +
+        '<div class="metric-row">' +
           '<div class="metric"><strong>' + status.cleanupIntervalSeconds + 's</strong><span>cleanup interval</span></div>' +
           '<div class="metric"><strong>' + escapeHTML(status.statePath || "-") + '</strong><span>state file</span></div>' +
           '<div class="metric"><strong>' + peerTransferPaths.length + '</strong><span>tracked transfer peers</span></div>' +
@@ -943,8 +949,9 @@ const webAppHTML = `<!doctype html>
         const fallback = peerFallbackState(peer, route, transfer, udpKeepaliveResultMap);
         const burstProfile = udpBurstProfileMap[peer.peerId || ""] || null;
         const decision = udpDecisionMap[peer.peerId || ""] || null;
+        const decisionRisk = classifyUDPDecisionRisk(route, transfer, decision);
         return '<div class="swarm">' +
-          '<strong>' + escapeHTML(peer.peerId || "peer") + '</strong> ' + formatProbeResultChip(result) + ' ' + formatRouteChip(route) + ' ' + formatRouteDriftChip(route, transfer) + ' ' + formatFallbackChip(fallback) + ' ' + formatBurstProfileChip(burstProfile) + ' ' + formatUDPDecisionChip(decision) + '<br>' +
+          '<strong>' + escapeHTML(peer.peerId || "peer") + '</strong> ' + formatProbeResultChip(result) + ' ' + formatRouteChip(route) + ' ' + formatRouteDriftChip(route, transfer) + ' ' + formatFallbackChip(fallback) + ' ' + formatBurstProfileChip(burstProfile) + ' ' + formatUDPDecisionChip(decision) + ' ' + formatUDPDecisionRiskChip(decisionRisk) + '<br>' +
           'actual ' + formatActualPathChip(transfer) + pathTotalsSuffix(transfer) +
           'udp ' + escapeHTML((peer.udpAddrs || []).join(",") || "-") +
           '<br>observed ' + escapeHTML(peer.observedUdpAddr || "-") +
@@ -1038,6 +1045,64 @@ const webAppHTML = `<!doctype html>
 
     function countUDPDecisionsByStage(items, stage) {
       return (items || []).filter((item) => String(item.lastStage || "") === stage).length;
+    }
+
+    function classifyUDPDecisionRisk(advice, transfer, decision) {
+      if (!decision || !decision.burstProfile) {
+        return { kind: "none", label: "" };
+      }
+      const drift = peerRouteDrift(advice, transfer);
+      const profile = String(decision.burstProfile || "");
+      const stage = String(decision.lastStage || "");
+      const reports = Number(decision.reportCount || 0);
+      if (drift && drift.label === "udp miss" && profile === "aggressive" && stage === "probe" && reports >= 2) {
+        return { kind: "low", label: "low-value udp" };
+      }
+      if (drift && drift.label === "udp miss" && stage === "have") {
+        return { kind: "warn", label: "watch udp" };
+      }
+      if ((!drift || drift.label === "udp recovered") && stage === "piece") {
+        return { kind: "recovering", label: "udp recovering" };
+      }
+      if ((!drift || drift.label !== "udp miss") && profile === "warm" && stage === "piece") {
+        return { kind: "stable", label: "udp stable" };
+      }
+      return { kind: "none", label: "" };
+    }
+
+    function formatUDPDecisionRiskChip(item) {
+      if (!item || !item.label) {
+        return '';
+      }
+      if (item.kind === "low") {
+        return '<span class="chip chip-fail">' + escapeHTML(item.label) + '</span>';
+      }
+      if (item.kind === "warn") {
+        return '<span class="chip chip-timeout">' + escapeHTML(item.label) + '</span>';
+      }
+      if (item.kind === "recovering") {
+        return '<span class="chip chip-info">' + escapeHTML(item.label) + '</span>';
+      }
+      if (item.kind === "stable") {
+        return '<span class="chip chip-ok">' + escapeHTML(item.label) + '</span>';
+      }
+      return '';
+    }
+
+    function summarizeUDPDecisionRisk(swarms, udpProbeResultMap, peerTransferPathMap, udpDecisionMap) {
+      const summary = { lowValue: 0, recovering: 0, stable: 0 };
+      for (const swarm of swarms || []) {
+        for (const peer of (swarm.peers || [])) {
+          const route = peerRouteAdvice(peer, udpProbeResultMap[peer.peerId || ""] || null);
+          const transfer = peerTransferPathMap[peer.peerId || ""] || null;
+          const decision = udpDecisionMap[peer.peerId || ""] || null;
+          const risk = classifyUDPDecisionRisk(route, transfer, decision);
+          if (risk.kind === "low") summary.lowValue += 1;
+          if (risk.kind === "recovering") summary.recovering += 1;
+          if (risk.kind === "stable") summary.stable += 1;
+        }
+      }
+      return summary;
     }
 
     function formatRouteChip(advice) {
