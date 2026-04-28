@@ -197,3 +197,50 @@ func TestUDPPieceTimeoutAdjustsByDecisionRisk(t *testing.T) {
 		t.Fatalf("expected stable risk to widen warm timeout to 4.4s, got %s", got)
 	}
 }
+
+func TestSelectionReasonMarksPublicMappedUDPCloseScorePreference(t *testing.T) {
+	selected := scheduler.PeerCandidate{
+		PeerID:          "udp://public",
+		Transport:       "udp",
+		Score:           1.04,
+		UDPPublicMapped: true,
+		HaveRanges:      []core.HaveRange{{Start: 0, End: 5}},
+	}
+	peers := []scheduler.PeerCandidate{
+		selected,
+		{
+			PeerID:     "tcp://steady",
+			Transport:  "tcp",
+			Score:      1.0,
+			HaveRanges: []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	if got := selectionReason(2, selected, peers); got != "selected_udp_public_mapped_close_score" {
+		t.Fatalf("expected public-mapped close-score reason, got %s", got)
+	}
+}
+
+func TestSelectionReasonSkipsPublicMappedReasonForSuppressedRisk(t *testing.T) {
+	selected := scheduler.PeerCandidate{
+		PeerID:          "udp://public-low",
+		Transport:       "udp",
+		Score:           1.08,
+		UDPPublicMapped: true,
+		UDPDecisionRisk: "low",
+		HaveRanges:      []core.HaveRange{{Start: 0, End: 5}},
+	}
+	peers := []scheduler.PeerCandidate{
+		selected,
+		{
+			PeerID:     "tcp://steady",
+			Transport:  "tcp",
+			Score:      1.0,
+			HaveRanges: []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	if got := selectionReason(2, selected, peers); got != "selected_udp_despite_low_value_risk" {
+		t.Fatalf("expected low-risk reason to win, got %s", got)
+	}
+}

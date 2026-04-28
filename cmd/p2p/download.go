@@ -503,6 +503,9 @@ func reportTrackerUDPDecision(logger *logging.Logger, discovery peerDiscoveryOpt
 
 func selectionReason(pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) string {
 	if selected.Transport == "udp" {
+		if selected.UDPPublicMapped && selectedByPublicMappedPreference(pieceIndex, selected, peerCandidates) {
+			return "selected_udp_public_mapped_close_score"
+		}
 		switch strings.TrimSpace(selected.UDPDecisionRisk) {
 		case "low":
 			return "selected_udp_despite_low_value_risk"
@@ -528,6 +531,45 @@ func selectionReason(pieceIndex int, selected scheduler.PeerCandidate, peerCandi
 		return "selected_tcp_over_udp_candidate"
 	}
 	return "selected_tcp_no_udp_candidate"
+}
+
+func selectedByPublicMappedPreference(pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) bool {
+	if selected.Transport != "udp" || !selected.UDPPublicMapped || isSuppressedDecisionRisk(selected.UDPDecisionRisk) {
+		return false
+	}
+	margin := publicMappedDecisionMargin(selected.UDPDecisionRisk)
+	for _, candidate := range peerCandidates {
+		if candidate.Transport != "tcp" {
+			continue
+		}
+		if pieceIndex >= 0 && !core.ContainsPiece(candidate.HaveRanges, pieceIndex) {
+			continue
+		}
+		if candidate.Score >= selected.Score-margin {
+			return true
+		}
+	}
+	return false
+}
+
+func isSuppressedDecisionRisk(risk string) bool {
+	switch strings.TrimSpace(risk) {
+	case "low", "warn":
+		return true
+	default:
+		return false
+	}
+}
+
+func publicMappedDecisionMargin(risk string) float64 {
+	switch strings.TrimSpace(risk) {
+	case "stable":
+		return 0.28
+	case "recovering":
+		return 0.18
+	default:
+		return 0.12
+	}
 }
 
 func topUDPCandidateForPiece(pieceIndex int, peerCandidates []scheduler.PeerCandidate) (scheduler.PeerCandidate, bool) {
