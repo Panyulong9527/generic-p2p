@@ -168,6 +168,61 @@ func TestChoosePeerPrefersTCPOverWatchUDPWhenScoresAreNear(t *testing.T) {
 	}
 }
 
+func TestChoosePeerPrefersPublicMappedUDPWhenScoresAreClose(t *testing.T) {
+	s := Scheduler{}
+	peers := []PeerCandidate{
+		{
+			PeerID:          "udp-public",
+			Transport:       "udp",
+			Score:           1.02,
+			UDPPublicMapped: true,
+			HaveRanges:      []core.HaveRange{{Start: 0, End: 5}},
+		},
+		{
+			PeerID:     "tcp-steady",
+			Transport:  "tcp",
+			Score:      1.0,
+			HaveRanges: []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	peer, ok := s.ChoosePeer(2, peers)
+	if !ok {
+		t.Fatal("expected to select a peer")
+	}
+	if peer.PeerID != "udp-public" {
+		t.Fatalf("expected public-mapped udp to win close score race, got %s", peer.PeerID)
+	}
+}
+
+func TestChoosePeerDoesNotPreferPublicMappedUDPWhenRiskIsSuppressed(t *testing.T) {
+	s := Scheduler{}
+	peers := []PeerCandidate{
+		{
+			PeerID:          "udp-public-low",
+			Transport:       "udp",
+			Score:           1.08,
+			UDPPublicMapped: true,
+			UDPDecisionRisk: "low",
+			HaveRanges:      []core.HaveRange{{Start: 0, End: 5}},
+		},
+		{
+			PeerID:     "tcp-steady",
+			Transport:  "tcp",
+			Score:      1.0,
+			HaveRanges: []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	peer, ok := s.ChoosePeer(2, peers)
+	if !ok {
+		t.Fatal("expected to select a peer")
+	}
+	if peer.PeerID != "tcp-steady" {
+		t.Fatalf("expected tcp peer to keep winning when public-mapped udp is low risk, got %s", peer.PeerID)
+	}
+}
+
 func TestChoosePiecePrefersRarestAvailable(t *testing.T) {
 	s := Scheduler{}
 	peers := []PeerCandidate{

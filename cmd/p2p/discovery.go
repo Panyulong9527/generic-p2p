@@ -895,6 +895,7 @@ func collectPeerCandidates(logger *logging.Logger, contentID string, peerAddrs [
 			Score:           udpCandidateScore(addr, udpPreferences, time.Now()),
 			BurstProfile:    burstProfile,
 			UDPDecisionRisk: strings.TrimSpace(udpPreferences[addr].decisionRisk),
+			UDPPublicMapped: strings.TrimSpace(udpPreferences[addr].source) == "stun",
 			HaveRanges:      haveRanges,
 		})
 	}

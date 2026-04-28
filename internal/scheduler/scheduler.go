@@ -10,6 +10,7 @@ type PeerCandidate struct {
 	Score           float64
 	BurstProfile    string
 	UDPDecisionRisk string
+	UDPPublicMapped bool
 	HaveRanges      []core.HaveRange
 	PendingCount    int
 }
@@ -69,6 +70,12 @@ func pieceAvailability(pieceIndex int, peers []PeerCandidate) int {
 }
 
 func betterPeer(candidate PeerCandidate, current PeerCandidate) bool {
+	if preferCandidateByPublicMappedUDP(candidate, current) {
+		return true
+	}
+	if preferCurrentByPublicMappedUDP(candidate, current) {
+		return false
+	}
 	if preferCandidateByTransportRisk(candidate, current) {
 		return true
 	}
@@ -115,5 +122,32 @@ func udpRiskTCPPreferenceMargin(risk string) float64 {
 		return 0.18
 	default:
 		return 0
+	}
+}
+
+func preferCandidateByPublicMappedUDP(candidate PeerCandidate, current PeerCandidate) bool {
+	return candidate.Transport == "udp" &&
+		candidate.UDPPublicMapped &&
+		!isSuppressedUDPRisk(candidate.UDPDecisionRisk) &&
+		current.Transport == "tcp" &&
+		candidate.Score >= current.Score-publicMappedUDPPreferenceMargin(candidate)
+}
+
+func preferCurrentByPublicMappedUDP(candidate PeerCandidate, current PeerCandidate) bool {
+	return current.Transport == "udp" &&
+		current.UDPPublicMapped &&
+		!isSuppressedUDPRisk(current.UDPDecisionRisk) &&
+		candidate.Transport == "tcp" &&
+		current.Score >= candidate.Score-publicMappedUDPPreferenceMargin(current)
+}
+
+func publicMappedUDPPreferenceMargin(candidate PeerCandidate) float64 {
+	switch candidate.UDPDecisionRisk {
+	case "stable":
+		return 0.28
+	case "recovering":
+		return 0.18
+	default:
+		return 0.12
 	}
 }
