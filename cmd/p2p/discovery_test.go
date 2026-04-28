@@ -301,6 +301,7 @@ func TestBuildTrackerUDPPeerBiasesIncludesBurstProfileBias(t *testing.T) {
 				ContentID:      "sha256-demo",
 				Profile:        "warm",
 				LastOutcome:    "success",
+				LastStage:      "have",
 				LastReportedAt: now.Add(-5 * time.Second).Unix(),
 			},
 			{
@@ -308,6 +309,7 @@ func TestBuildTrackerUDPPeerBiasesIncludesBurstProfileBias(t *testing.T) {
 				ContentID:      "sha256-demo",
 				Profile:        "aggressive",
 				LastOutcome:    "failure",
+				LastStage:      "probe",
 				FailureCount:   2,
 				LastReportedAt: now.Add(-6 * time.Second).Unix(),
 			},
@@ -324,11 +326,46 @@ func TestBuildTrackerUDPPeerBiasesIncludesBurstProfileBias(t *testing.T) {
 	}
 
 	biases := buildTrackerUDPPeerBiases(status, "sha256-demo", now)
-	if got := biases["peer-a"]; math.Abs(got-0.08) > 1e-9 {
-		t.Fatalf("expected warm burst bias 0.08, got %.2f", got)
+	if got := biases["peer-a"]; math.Abs(got-0.11) > 1e-9 {
+		t.Fatalf("expected warm have-success burst bias 0.11, got %.2f", got)
 	}
-	if got := biases["peer-b"]; math.Abs(got-(-0.08)) > 1e-9 {
-		t.Fatalf("expected aggressive burst bias -0.08, got %.2f", got)
+	if got := biases["peer-b"]; math.Abs(got-(-0.18)) > 1e-9 {
+		t.Fatalf("expected aggressive probe-failure burst bias -0.18, got %.2f", got)
+	}
+}
+
+func TestTrackerBurstProfileStageBiasPenalizesHaveFailuresLessThanProbeFailures(t *testing.T) {
+	now := time.Unix(760, 0)
+	probeFailure := trackerBurstProfileBias(tracker.UDPBurstProfileStatus{
+		Profile:        "aggressive",
+		LastOutcome:    "failure",
+		LastStage:      "probe",
+		LastReportedAt: now.Add(-4 * time.Second).Unix(),
+	}, now)
+	haveFailure := trackerBurstProfileBias(tracker.UDPBurstProfileStatus{
+		Profile:        "aggressive",
+		LastOutcome:    "failure",
+		LastStage:      "have",
+		LastReportedAt: now.Add(-4 * time.Second).Unix(),
+	}, now)
+	pieceFailure := trackerBurstProfileBias(tracker.UDPBurstProfileStatus{
+		Profile:        "aggressive",
+		LastOutcome:    "failure",
+		LastStage:      "piece",
+		LastReportedAt: now.Add(-4 * time.Second).Unix(),
+	}, now)
+	pieceSuccess := trackerBurstProfileBias(tracker.UDPBurstProfileStatus{
+		Profile:        "warm",
+		LastOutcome:    "success",
+		LastStage:      "piece",
+		LastReportedAt: now.Add(-4 * time.Second).Unix(),
+	}, now)
+
+	if !(probeFailure < haveFailure && haveFailure < pieceFailure) {
+		t.Fatalf("expected stage penalties probe < have < piece, got probe=%.2f have=%.2f piece=%.2f", probeFailure, haveFailure, pieceFailure)
+	}
+	if math.Abs(pieceSuccess-0.14) > 1e-9 {
+		t.Fatalf("expected warm piece-success bias 0.14, got %.2f", pieceSuccess)
 	}
 }
 

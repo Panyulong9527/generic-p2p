@@ -522,12 +522,42 @@ func trackerBurstProfileBias(item tracker.UDPBurstProfileStatus, now time.Time) 
 	}
 	switch strings.TrimSpace(item.Profile) {
 	case "warm":
-		return 0.08
+		return 0.08 + trackerBurstProfileStageBias(item)
 	case "aggressive":
 		if strings.TrimSpace(item.LastOutcome) == "failure" {
-			return -0.08
+			return -0.08 + trackerBurstProfileStageBias(item)
 		}
-		return -0.04
+		return -0.04 + trackerBurstProfileStageBias(item)
+	default:
+		return 0
+	}
+}
+
+func trackerBurstProfileStageBias(item tracker.UDPBurstProfileStatus) float64 {
+	stage := strings.TrimSpace(item.LastStage)
+	outcome := strings.TrimSpace(item.LastOutcome)
+
+	switch outcome {
+	case "success":
+		switch stage {
+		case "piece":
+			return 0.06
+		case "have":
+			return 0.03
+		default:
+			return 0
+		}
+	case "failure":
+		switch stage {
+		case "probe":
+			return -0.10
+		case "have":
+			return -0.06
+		case "piece":
+			return -0.03
+		default:
+			return 0
+		}
 	default:
 		return 0
 	}
