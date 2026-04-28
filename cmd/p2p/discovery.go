@@ -20,6 +20,7 @@ type udpPeerPreference struct {
 	trackerBias  float64
 	burstProfile string
 	decisionRisk string
+	source       string
 }
 
 type udpBurstProfileStats struct {
@@ -113,6 +114,7 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 			pref.trackerBias = maxFloat64(pref.trackerBias, probeBiases[peer.PeerID])
 			pref.burstProfile = strings.TrimSpace(burstProfile.Profile)
 			pref.decisionRisk = decisionRisk
+			pref.source = "local_observed"
 			preferences[observedAddr] = pref
 			maybeKeepAliveUDPPath(logger, contentID, peer.PeerID, trackerURL, selfUDPListenAddr, observedAddr, now)
 		}
@@ -131,6 +133,9 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 			pref.trackerBias = maxFloat64(pref.trackerBias, probeBiases[peer.PeerID])
 			pref.burstProfile = strings.TrimSpace(burstProfile.Profile)
 			pref.decisionRisk = decisionRisk
+			if strings.TrimSpace(pref.source) == "" {
+				pref.source = "declared_udp"
+			}
 			preferences[addr] = pref
 		}
 		if peer.ObservedUDPAddr != "" && peer.ObservedUDPAddr != selfUDPListenAddr {
@@ -145,6 +150,11 @@ func discoverTrackerUDPPeers(logger *logging.Logger, contentID string, trackerUR
 			pref.trackerBias = maxFloat64(pref.trackerBias, probeBiases[peer.PeerID])
 			pref.burstProfile = strings.TrimSpace(burstProfile.Profile)
 			pref.decisionRisk = decisionRisk
+			if strings.TrimSpace(peer.ObservedUDPSource) != "" {
+				pref.source = strings.TrimSpace(peer.ObservedUDPSource)
+			} else if strings.TrimSpace(pref.source) == "" {
+				pref.source = "tracker"
+			}
 			preferences[peer.ObservedUDPAddr] = pref
 			maybeKeepAliveUDPPath(logger, contentID, peer.PeerID, trackerURL, selfUDPListenAddr, peer.ObservedUDPAddr, now)
 		}
@@ -890,9 +900,24 @@ func udpCandidateScore(addr string, udpPreferences map[string]udpPeerPreference,
 		case age <= 30*time.Second:
 			score = 1.4
 		}
+	} else {
+		score = udpCandidateBaseScoreBySource(preference.source)
 	}
 	score += preference.trackerBias
 	return score
+}
+
+func udpCandidateBaseScoreBySource(source string) float64 {
+	switch strings.TrimSpace(source) {
+	case "stun":
+		return 1.5
+	case "tracker":
+		return 1.35
+	case "declared_udp":
+		return 1.2
+	default:
+		return 1.2
+	}
 }
 
 func udpProbeTimeoutForProfile(profile string) time.Duration {

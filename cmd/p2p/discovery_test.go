@@ -13,9 +13,9 @@ import (
 func TestUDPCandidateScorePrefersFreshObservedAddresses(t *testing.T) {
 	now := time.Unix(100, 0)
 	observed := map[string]udpPeerPreference{
-		"198.51.100.10:9003": {observedAt: now.Add(-3 * time.Second)},
-		"198.51.100.11:9003": {observedAt: now.Add(-10 * time.Second)},
-		"198.51.100.12:9003": {observedAt: now.Add(-20 * time.Second)},
+		"198.51.100.10:9003": {observedAt: now.Add(-3 * time.Second), source: "local_observed"},
+		"198.51.100.11:9003": {observedAt: now.Add(-10 * time.Second), source: "local_observed"},
+		"198.51.100.12:9003": {observedAt: now.Add(-20 * time.Second), source: "local_observed"},
 	}
 
 	if got := udpCandidateScore("198.51.100.10:9003", observed, now); got != 1.8 {
@@ -29,6 +29,25 @@ func TestUDPCandidateScorePrefersFreshObservedAddresses(t *testing.T) {
 	}
 	if got := udpCandidateScore("203.0.113.20:9003", observed, now); got != 1.2 {
 		t.Fatalf("expected default udp score 1.2, got %.1f", got)
+	}
+}
+
+func TestUDPCandidateScoreSeparatesSTUNTrackerAndDeclaredSources(t *testing.T) {
+	now := time.Unix(120, 0)
+	preferences := map[string]udpPeerPreference{
+		"198.51.100.21:9003": {source: "stun"},
+		"198.51.100.22:9003": {source: "tracker"},
+		"198.51.100.23:9003": {source: "declared_udp"},
+	}
+
+	if got := udpCandidateScore("198.51.100.21:9003", preferences, now); got != 1.5 {
+		t.Fatalf("expected stun-observed score 1.5, got %.2f", got)
+	}
+	if got := udpCandidateScore("198.51.100.22:9003", preferences, now); got != 1.35 {
+		t.Fatalf("expected tracker-observed score 1.35, got %.2f", got)
+	}
+	if got := udpCandidateScore("198.51.100.23:9003", preferences, now); got != 1.2 {
+		t.Fatalf("expected declared udp score 1.2, got %.2f", got)
 	}
 }
 
