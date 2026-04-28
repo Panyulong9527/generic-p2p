@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"generic-p2p/internal/core"
+	p2pnet "generic-p2p/internal/net"
 	"generic-p2p/internal/scheduler"
 )
 
@@ -318,5 +319,81 @@ func TestUDPPieceChunkRoundTimeoutAdjustsByStageRiskAndPublicMapping(t *testing.
 		UDPDecisionRisk: "low",
 	}); got != 850*time.Millisecond {
 		t.Fatalf("expected aggressive/probe/low round timeout 850ms, got %s", got)
+	}
+}
+
+func TestUDPPieceChunkWindowAdjustsByRecentProgress(t *testing.T) {
+	now := time.Now()
+	const contentID = "sha256-download-window-progress"
+
+	recordUDPChunkProgress(contentID, "udp://fast-peer", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  4,
+		Duration:        700 * time.Millisecond,
+		Completed:       true,
+	}, now)
+	recordUDPChunkProgress(contentID, "udp://slow-peer", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  1,
+		Duration:        1300 * time.Millisecond,
+	}, now)
+
+	if got := udpPieceChunkWindowForCandidate(contentID, scheduler.PeerCandidate{
+		Transport: "udp",
+		PeerID:    "udp://fast-peer",
+	}); got != 5 {
+		t.Fatalf("expected recent fast progress to widen default chunk window to 5, got %d", got)
+	}
+
+	if got := udpPieceChunkWindowForCandidate(contentID, scheduler.PeerCandidate{
+		Transport: "udp",
+		PeerID:    "udp://slow-peer",
+	}); got != 3 {
+		t.Fatalf("expected weak progress to shrink default chunk window to 3, got %d", got)
+	}
+}
+
+func TestUDPPieceChunkRoundTimeoutAdjustsByRecentProgress(t *testing.T) {
+	now := time.Now()
+	const contentID = "sha256-download-round-progress"
+
+	recordUDPChunkProgress(contentID, "udp://fast-round-peer", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 4,
+		ReceivedChunks:  4,
+		Duration:        600 * time.Millisecond,
+		Completed:       true,
+	}, now)
+	recordUDPChunkProgress(contentID, "udp://empty-round-peer", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 3,
+		ReceivedChunks:  0,
+		Duration:        1100 * time.Millisecond,
+	}, now)
+
+	if got := udpPieceChunkRoundTimeoutForCandidate(contentID, scheduler.PeerCandidate{
+		Transport: "udp",
+		PeerID:    "udp://fast-round-peer",
+	}); got != 850*time.Millisecond {
+		t.Fatalf("expected fast recent progress to tighten default round timeout to 850ms, got %s", got)
+	}
+
+	if got := udpPieceChunkRoundTimeoutForCandidate(contentID, scheduler.PeerCandidate{
+		Transport: "udp",
+		PeerID:    "udp://empty-round-peer",
+	}); got != 1250*time.Millisecond {
+		t.Fatalf("expected empty recent progress to widen default round timeout to 1250ms, got %s", got)
+	}
+}
+
+func TestRecentUDPChunkProgressExpires(t *testing.T) {
+	now := time.Now()
+	const contentID = "sha256-download-progress-expire"
+	recordUDPChunkProgress(contentID, "udp://stale-peer", p2pnet.UDPPieceRoundStats{
+		RequestedChunks: 2,
+		ReceivedChunks:  1,
+		Duration:        time.Second,
+	}, now.Add(-25*time.Second))
+
+	if _, ok := recentUDPChunkProgress(contentID, "udp://stale-peer", now); ok {
+		t.Fatal("expected stale chunk progress sample to expire")
 	}
 }

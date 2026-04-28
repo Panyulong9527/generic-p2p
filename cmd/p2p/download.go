@@ -20,6 +20,22 @@ type downloadPieceState struct {
 	inProgress map[int]bool
 }
 
+type udpChunkProgressSample struct {
+	RequestedChunks int
+	ReceivedChunks  int
+	TotalChunks     int
+	Duration        time.Duration
+	Completed       bool
+	RecordedAt      time.Time
+}
+
+var udpChunkProgressState = struct {
+	mu      sync.Mutex
+	entries map[string]udpChunkProgressSample
+}{
+	entries: make(map[string]udpChunkProgressSample),
+}
+
 func downloadPieces(logger *logging.Logger, manifest *core.ContentManifest, store *core.PieceStore, discovery peerDiscoveryOptions, workers int) error {
 	state := &downloadPieceState{
 		inProgress: make(map[int]bool),
@@ -218,6 +234,9 @@ func fetchPieceFromCandidate(candidate scheduler.PeerCandidate, contentID string
 			WithLocalAddr(selfUDPListenAddr).
 			WithChunkWindow(udpPieceChunkWindowForCandidate(contentID, candidate)).
 			WithChunkRoundTimeout(udpPieceChunkRoundTimeoutForCandidate(contentID, candidate)).
+			WithPieceRoundObserver(func(stats p2pnet.UDPPieceRoundStats) {
+				recordUDPChunkProgress(contentID, candidate.PeerID, stats, time.Now())
+			}).
 			FetchPiece(contentID, pieceIndex)
 	default:
 		addr := candidate.Addr
@@ -233,6 +252,7 @@ func udpPieceChunkWindowForCandidate(contentID string, candidate scheduler.PeerC
 	stage := currentUDPBurstStageForPeer(contentID, candidate.PeerID, time.Now())
 	window = stageAdjustedUDPPieceChunkWindow(window, stage)
 	window = decisionRiskAdjustedUDPPieceChunkWindow(window, candidate.UDPDecisionRisk)
+	window = progressAdjustedUDPPieceChunkWindow(window, contentID, candidate.PeerID, time.Now())
 	if candidate.UDPPublicMapped && !isSuppressedDecisionRisk(candidate.UDPDecisionRisk) && window < 8 {
 		window++
 	}
@@ -250,6 +270,7 @@ func udpPieceChunkRoundTimeoutForCandidate(contentID string, candidate scheduler
 	stage := currentUDPBurstStageForPeer(contentID, candidate.PeerID, time.Now())
 	timeout = stageAdjustedUDPPieceChunkRoundTimeout(timeout, stage)
 	timeout = decisionRiskAdjustedUDPPieceChunkRoundTimeout(timeout, candidate.UDPDecisionRisk)
+	timeout = progressAdjustedUDPPieceChunkRoundTimeout(timeout, contentID, candidate.PeerID, time.Now())
 	if candidate.UDPPublicMapped && !isSuppressedDecisionRisk(candidate.UDPDecisionRisk) {
 		timeout -= 150 * time.Millisecond
 	}
@@ -360,6 +381,44 @@ func decisionRiskAdjustedUDPPieceChunkWindow(base int, risk string) int {
 	default:
 		return base
 	}
+}
+
+func progressAdjustedUDPPieceChunkWindow(base int, contentID string, peerID string, now time.Time) int {
+	sample, ok := recentUDPChunkProgress(contentID, peerID, now)
+	if !ok {
+		return base
+	}
+	switch {
+	case sample.Completed && sample.Duration <= 900*time.Millisecond:
+		if base < 8 {
+			return base + 1
+		}
+	case sample.RequestedChunks > 0 && sample.ReceivedChunks*2 < sample.RequestedChunks:
+		if base > 1 {
+			return base - 1
+		}
+	case sample.RequestedChunks >= 3 && sample.ReceivedChunks >= sample.RequestedChunks-1:
+		if base < 8 {
+			return base + 1
+		}
+	}
+	return base
+}
+
+func progressAdjustedUDPPieceChunkRoundTimeout(base time.Duration, contentID string, peerID string, now time.Time) time.Duration {
+	sample, ok := recentUDPChunkProgress(contentID, peerID, now)
+	if !ok {
+		return base
+	}
+	switch {
+	case sample.Completed && sample.Duration+150*time.Millisecond < base:
+		return base - 150*time.Millisecond
+	case sample.RequestedChunks > 0 && sample.ReceivedChunks == 0:
+		return base + 250*time.Millisecond
+	case sample.RequestedChunks > 0 && sample.ReceivedChunks*2 < sample.RequestedChunks:
+		return base + 150*time.Millisecond
+	}
+	return base
 }
 
 func transferErrorKind(candidate scheduler.PeerCandidate, err error) string {
@@ -544,6 +603,43 @@ func normalizedBurstProfile(profile string) string {
 		return "default"
 	}
 	return profile
+}
+
+func recordUDPChunkProgress(contentID string, peerID string, stats p2pnet.UDPPieceRoundStats, now time.Time) {
+	if strings.TrimSpace(contentID) == "" || strings.TrimSpace(peerID) == "" {
+		return
+	}
+	if stats.RequestedChunks <= 0 {
+		return
+	}
+	udpChunkProgressState.mu.Lock()
+	defer udpChunkProgressState.mu.Unlock()
+	udpChunkProgressState.entries[contentID+"|"+peerID] = udpChunkProgressSample{
+		RequestedChunks: stats.RequestedChunks,
+		ReceivedChunks:  stats.ReceivedChunks,
+		TotalChunks:     stats.TotalChunks,
+		Duration:        stats.Duration,
+		Completed:       stats.Completed,
+		RecordedAt:      now,
+	}
+}
+
+func recentUDPChunkProgress(contentID string, peerID string, now time.Time) (udpChunkProgressSample, bool) {
+	if strings.TrimSpace(contentID) == "" || strings.TrimSpace(peerID) == "" {
+		return udpChunkProgressSample{}, false
+	}
+	key := contentID + "|" + peerID
+	udpChunkProgressState.mu.Lock()
+	defer udpChunkProgressState.mu.Unlock()
+	sample, ok := udpChunkProgressState.entries[key]
+	if !ok {
+		return udpChunkProgressSample{}, false
+	}
+	if now.Sub(sample.RecordedAt) > 20*time.Second {
+		delete(udpChunkProgressState.entries, key)
+		return udpChunkProgressSample{}, false
+	}
+	return sample, true
 }
 
 func recordSelectionDecision(store *core.PieceStore, pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) core.SelectionDecision {

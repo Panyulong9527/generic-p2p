@@ -285,6 +285,18 @@ type UDPClient struct {
 	Timeout           time.Duration
 	ChunkWindow       int
 	ChunkRoundTimeout time.Duration
+	OnPieceRound      func(UDPPieceRoundStats)
+}
+
+type UDPPieceRoundStats struct {
+	ContentID       string
+	PieceIndex      int
+	Round           int
+	RequestedChunks int
+	ReceivedChunks  int
+	TotalChunks     int
+	Duration        time.Duration
+	Completed       bool
 }
 
 type UDPBurstPhase struct {
@@ -323,6 +335,15 @@ func (c *UDPClient) WithChunkRoundTimeout(timeout time.Duration) *UDPClient {
 	}
 	clone := *c
 	clone.ChunkRoundTimeout = timeout
+	return &clone
+}
+
+func (c *UDPClient) WithPieceRoundObserver(observer func(UDPPieceRoundStats)) *UDPClient {
+	if c == nil {
+		return nil
+	}
+	clone := *c
+	clone.OnPieceRound = observer
 	return &clone
 }
 
@@ -763,10 +784,14 @@ func (c *UDPClient) collectPieceChunksWithConn(conn *net.UDPConn, remote *net.UD
 	totalChunks := -1
 	window := c.chunkWindow()
 	roundTimeout := c.chunkRoundTimeout()
+	requestedChunks := 1
 	for round := 0; round < 6; round++ {
+		startedAt := time.Now()
+		receivedBefore := len(chunks)
 		deadline := time.Now().Add(roundTimeout)
 		for {
 			if totalChunks >= 0 && len(chunks) == totalChunks {
+				c.recordPieceRound(contentID, pieceIndex, round, requestedChunks, len(chunks)-receivedBefore, totalChunks, time.Since(startedAt), true)
 				return joinUDPChunks(chunks, totalChunks), nil
 			}
 			if time.Now().After(deadline) {
@@ -797,10 +822,12 @@ func (c *UDPClient) collectPieceChunksWithConn(conn *net.UDPConn, remote *net.UD
 				continue
 			}
 		}
+		c.recordPieceRound(contentID, pieceIndex, round, requestedChunks, len(chunks)-receivedBefore, totalChunks, time.Since(startedAt), totalChunks >= 0 && len(chunks) == totalChunks)
 		if totalChunks >= 0 && len(chunks) == totalChunks {
 			return joinUDPChunks(chunks, totalChunks), nil
 		}
 		if totalChunks <= 0 {
+			requestedChunks = 1
 			if err := writeUDPPieceRequest(conn, remote, requestID, contentID, pieceIndex, []int{0}); err != nil {
 				return nil, err
 			}
@@ -810,6 +837,7 @@ func (c *UDPClient) collectPieceChunksWithConn(conn *net.UDPConn, remote *net.UD
 		if len(nextBatch) == 0 {
 			return joinUDPChunks(chunks, totalChunks), nil
 		}
+		requestedChunks = len(nextBatch)
 		if err := writeUDPPieceRequest(conn, remote, requestID, contentID, pieceIndex, nextBatch); err != nil {
 			return nil, err
 		}
@@ -826,12 +854,16 @@ func (c *UDPClient) collectPieceChunksWithSharedSocket(conn *net.UDPConn, remote
 	totalChunks := -1
 	window := c.chunkWindow()
 	roundTimeout := c.chunkRoundTimeout()
+	requestedChunks := 1
 	for round := 0; round < 6; round++ {
+		startedAt := time.Now()
+		receivedBefore := len(chunks)
 		deadline := time.NewTimer(roundTimeout)
 		timedOut := false
 		for !timedOut {
 			if totalChunks >= 0 && len(chunks) == totalChunks {
 				deadline.Stop()
+				c.recordPieceRound(contentID, pieceIndex, round, requestedChunks, len(chunks)-receivedBefore, totalChunks, time.Since(startedAt), true)
 				return joinUDPChunks(chunks, totalChunks), nil
 			}
 			select {
@@ -850,10 +882,12 @@ func (c *UDPClient) collectPieceChunksWithSharedSocket(conn *net.UDPConn, remote
 				collectUDPPieceChunk(message, requestID, contentID, pieceIndex, chunks, &totalChunks)
 			}
 		}
+		c.recordPieceRound(contentID, pieceIndex, round, requestedChunks, len(chunks)-receivedBefore, totalChunks, time.Since(startedAt), totalChunks >= 0 && len(chunks) == totalChunks)
 		if totalChunks >= 0 && len(chunks) == totalChunks {
 			return joinUDPChunks(chunks, totalChunks), nil
 		}
 		if totalChunks <= 0 {
+			requestedChunks = 1
 			if err := writeUDPPieceRequest(conn, remote, requestID, contentID, pieceIndex, []int{0}); err != nil {
 				return nil, err
 			}
@@ -863,6 +897,7 @@ func (c *UDPClient) collectPieceChunksWithSharedSocket(conn *net.UDPConn, remote
 		if len(nextBatch) == 0 {
 			return joinUDPChunks(chunks, totalChunks), nil
 		}
+		requestedChunks = len(nextBatch)
 		if err := writeUDPPieceRequest(conn, remote, requestID, contentID, pieceIndex, nextBatch); err != nil {
 			return nil, err
 		}
@@ -953,6 +988,22 @@ func (c *UDPClient) chunkRoundTimeout() time.Duration {
 		return c.Timeout
 	}
 	return 1500 * time.Millisecond
+}
+
+func (c *UDPClient) recordPieceRound(contentID string, pieceIndex int, round int, requestedChunks int, receivedChunks int, totalChunks int, duration time.Duration, completed bool) {
+	if c == nil || c.OnPieceRound == nil {
+		return
+	}
+	c.OnPieceRound(UDPPieceRoundStats{
+		ContentID:       contentID,
+		PieceIndex:      pieceIndex,
+		Round:           round,
+		RequestedChunks: requestedChunks,
+		ReceivedChunks:  receivedChunks,
+		TotalChunks:     totalChunks,
+		Duration:        duration,
+		Completed:       completed,
+	})
 }
 
 func udpRequestedChunkIndexes(req UDPPieceRequest, totalChunks int) []int {
