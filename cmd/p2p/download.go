@@ -132,7 +132,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 			continue
 		}
 		recordSelectionDecision(store, pieceIndex, selected, peerCandidates)
-		attemptCandidates := pieceAttemptCandidates(pieceIndex, selected, peerCandidates)
+		attemptCandidates := pieceAttemptCandidates(manifest.ContentID, pieceIndex, selected, peerCandidates)
 		var data []byte
 		var usedCandidate scheduler.PeerCandidate
 		var lastErr error
@@ -232,7 +232,7 @@ func transferErrorKind(candidate scheduler.PeerCandidate, err error) string {
 	return "generic"
 }
 
-func pieceAttemptCandidates(pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) []scheduler.PeerCandidate {
+func pieceAttemptCandidates(contentID string, pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) []scheduler.PeerCandidate {
 	if selected.Transport != "udp" {
 		return []scheduler.PeerCandidate{selected}
 	}
@@ -257,7 +257,7 @@ func pieceAttemptCandidates(pieceIndex int, selected scheduler.PeerCandidate, pe
 		}
 		return alternatives[i].PeerID < alternatives[j].PeerID
 	})
-	maxAlternatives := udpAttemptBudget(selected) - 1
+	maxAlternatives := udpAttemptBudget(contentID, selected) - 1
 	if maxAlternatives < 0 {
 		maxAlternatives = 0
 	}
@@ -267,8 +267,14 @@ func pieceAttemptCandidates(pieceIndex int, selected scheduler.PeerCandidate, pe
 	return append(attempts, alternatives...)
 }
 
-func udpAttemptBudget(selected scheduler.PeerCandidate) int {
-	switch selected.BurstProfile {
+func udpAttemptBudget(contentID string, selected scheduler.PeerCandidate) int {
+	base := udpAttemptBudgetForProfile(selected.BurstProfile)
+	stage := currentUDPBurstStageForPeer(contentID, selected.PeerID, time.Now())
+	return stageAdjustedUDPAttemptBudget(base, stage)
+}
+
+func udpAttemptBudgetForProfile(profile string) int {
+	switch strings.TrimSpace(profile) {
 	case "aggressive":
 		return 4
 	case "warm":
@@ -276,6 +282,33 @@ func udpAttemptBudget(selected scheduler.PeerCandidate) int {
 	default:
 		return 3
 	}
+}
+
+func stageAdjustedUDPAttemptBudget(base int, stage string) int {
+	switch strings.TrimSpace(stage) {
+	case "probe":
+		if base > 1 {
+			return base - 1
+		}
+		return 1
+	case "have":
+		return base
+	case "piece":
+		if base < 5 {
+			return base + 1
+		}
+		return 5
+	default:
+		return base
+	}
+}
+
+func currentUDPBurstStageForPeer(contentID string, peerID string, now time.Time) string {
+	stats, ok := udpBurstStats(contentID, peerID, now)
+	if !ok {
+		return ""
+	}
+	return currentUDPBurstStage(stats)
 }
 
 func udpPieceTimeout(selected scheduler.PeerCandidate) time.Duration {

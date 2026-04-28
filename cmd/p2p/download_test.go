@@ -45,7 +45,7 @@ func TestPieceAttemptCandidatesPrefersSelectedAndTopUDPAlternatives(t *testing.T
 		},
 	}
 
-	attempts := pieceAttemptCandidates(3, selected, peers)
+	attempts := pieceAttemptCandidates("", 3, selected, peers)
 	if len(attempts) != 3 {
 		t.Fatalf("expected 3 attempt candidates, got %d", len(attempts))
 	}
@@ -67,7 +67,7 @@ func TestPieceAttemptCandidatesReturnsOnlySelectedForTCP(t *testing.T) {
 		HaveRanges: []core.HaveRange{{Start: 0, End: 5}},
 	}
 
-	attempts := pieceAttemptCandidates(1, selected, []scheduler.PeerCandidate{selected})
+	attempts := pieceAttemptCandidates("", 1, selected, []scheduler.PeerCandidate{selected})
 	if len(attempts) != 1 || attempts[0].PeerID != selected.PeerID {
 		t.Fatalf("unexpected attempt candidates: %+v", attempts)
 	}
@@ -89,7 +89,7 @@ func TestPieceAttemptCandidatesAllowsMoreAlternativesForAggressiveBurstProfile(t
 		{PeerID: "udp://alt-4", Transport: "udp", Score: 1.0, HaveRanges: []core.HaveRange{{Start: 0, End: 5}}},
 	}
 
-	attempts := pieceAttemptCandidates(2, selected, peers)
+	attempts := pieceAttemptCandidates("", 2, selected, peers)
 	if len(attempts) != 4 {
 		t.Fatalf("expected 4 attempt candidates for aggressive burst profile, got %d", len(attempts))
 	}
@@ -99,14 +99,28 @@ func TestPieceAttemptCandidatesAllowsMoreAlternativesForAggressiveBurstProfile(t
 }
 
 func TestUDPAttemptBudgetVariesByBurstProfile(t *testing.T) {
-	if got := udpAttemptBudget(scheduler.PeerCandidate{Transport: "udp", BurstProfile: "warm"}); got != 2 {
+	if got := udpAttemptBudget("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "warm"}); got != 2 {
 		t.Fatalf("expected warm budget 2, got %d", got)
 	}
-	if got := udpAttemptBudget(scheduler.PeerCandidate{Transport: "udp", BurstProfile: "aggressive"}); got != 4 {
+	if got := udpAttemptBudget("", scheduler.PeerCandidate{Transport: "udp", BurstProfile: "aggressive"}); got != 4 {
 		t.Fatalf("expected aggressive budget 4, got %d", got)
 	}
-	if got := udpAttemptBudget(scheduler.PeerCandidate{Transport: "udp"}); got != 3 {
+	if got := udpAttemptBudget("", scheduler.PeerCandidate{Transport: "udp"}); got != 3 {
 		t.Fatalf("expected default budget 3, got %d", got)
+	}
+}
+
+func TestUDPAttemptBudgetAdjustsByLastStage(t *testing.T) {
+	now := time.Now()
+	const contentID = "sha256-download-budget-stage"
+	recordUDPBurstOutcome(contentID, "udp://probe-peer", "aggressive", "probe", false, now.Add(-2*time.Second))
+	recordUDPBurstOutcome(contentID, "udp://piece-peer", "default", "piece", false, now.Add(-2*time.Second))
+
+	if got := udpAttemptBudget(contentID, scheduler.PeerCandidate{Transport: "udp", PeerID: "udp://probe-peer", BurstProfile: "aggressive"}); got != 3 {
+		t.Fatalf("expected probe-stage budget to cool down to 3, got %d", got)
+	}
+	if got := udpAttemptBudget(contentID, scheduler.PeerCandidate{Transport: "udp", PeerID: "udp://piece-peer", BurstProfile: "default"}); got != 4 {
+		t.Fatalf("expected piece-stage budget to expand to 4, got %d", got)
 	}
 }
 
