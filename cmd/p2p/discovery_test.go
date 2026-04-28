@@ -430,10 +430,11 @@ func TestBuildTrackerUDPPeerBiasesIncludesUDPDecisionRiskBias(t *testing.T) {
 	}
 }
 
-func TestRequesterSideBurstPunchTargetsPrefersObservedAndDeduplicates(t *testing.T) {
+func TestRequesterSideBurstPunchTargetsPrefersSTUNObservedAndDeduplicates(t *testing.T) {
 	peer := tracker.PeerRecord{
-		PeerID:          "peer-a",
-		ObservedUDPAddr: "198.51.100.10:9003",
+		PeerID:            "peer-a",
+		ObservedUDPAddr:   "198.51.100.10:9003",
+		ObservedUDPSource: "stun",
 		UDPAddrs: []string{
 			"198.51.100.10:9003",
 			"198.51.100.11:9003",
@@ -453,6 +454,27 @@ func TestRequesterSideBurstPunchTargetsPrefersObservedAndDeduplicates(t *testing
 	}
 }
 
+func TestRequesterSideBurstPunchTargetsKeepsDeclaredFirstWithoutSTUNObservation(t *testing.T) {
+	peer := tracker.PeerRecord{
+		PeerID:          "peer-a",
+		ObservedUDPAddr: "198.51.100.10:9003",
+		UDPAddrs: []string{
+			"198.51.100.11:9003",
+			"198.51.100.12:9003",
+		},
+	}
+
+	got := requesterSideBurstPunchTargets(peer, "198.51.100.99:9003")
+	want := []string{
+		"198.51.100.11:9003",
+		"198.51.100.12:9003",
+		"198.51.100.10:9003",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected non-stun observed target to trail declared addrs, got %v", got)
+	}
+}
+
 func TestRequesterSideBurstPunchTargetsFallsBackToDeclaredUDPAddrs(t *testing.T) {
 	peer := tracker.PeerRecord{
 		PeerID: "peer-b",
@@ -469,6 +491,33 @@ func TestRequesterSideBurstPunchTargetsFallsBackToDeclaredUDPAddrs(t *testing.T)
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("expected declared udp addrs %v, got %v", want, got)
+	}
+}
+
+func TestResponderSideBurstPunchTargetsPrefersSTUNObservedRequesterAddr(t *testing.T) {
+	request := tracker.UDPProbeTask{
+		RequesterUDPAddr:  "198.51.100.20:9003",
+		ObservedUDPAddr:   "203.0.113.20:40123",
+		ObservedUDPSource: "stun",
+	}
+
+	got := responderSideBurstPunchTargets(request)
+	want := []string{"203.0.113.20:40123", "198.51.100.20:9003"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected stun-observed requester addr first, got %v", got)
+	}
+}
+
+func TestResponderSideBurstPunchTargetsPrefersRequesterAddrWithoutSTUN(t *testing.T) {
+	request := tracker.UDPProbeTask{
+		RequesterUDPAddr: "198.51.100.20:9003",
+		ObservedUDPAddr:  "203.0.113.20:40123",
+	}
+
+	got := responderSideBurstPunchTargets(request)
+	want := []string{"198.51.100.20:9003", "203.0.113.20:40123"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expected requester-declared addr first without stun source, got %v", got)
 	}
 }
 

@@ -118,18 +118,38 @@ func pollTrackerUDPProbeRequests(logger *logging.Logger, client *tracker.Client,
 	}
 
 	for _, request := range requests {
-		targetAddr := request.ObservedUDPAddr
-		if targetAddr == "" {
-			targetAddr = request.RequesterUDPAddr
-		}
-		if targetAddr == "" {
+		targets := responderSideBurstPunchTargets(request)
+		if len(targets) == 0 {
 			continue
 		}
 		phases := adaptiveResponderBurstPhases(request, time.Now())
 		profile := udpBurstProfileName(phases)
-		if err := p2pnet.NewUDPClient(targetAddr, 2*time.Second).WithLocalAddr(udpAddr).ProbeMultiBurstForPeer(request.ContentID, peerID, phases); err != nil {
+		succeeded := false
+		var lastErr error
+		for _, targetAddr := range targets {
+			if err := p2pnet.NewUDPClient(targetAddr, 2*time.Second).WithLocalAddr(udpAddr).ProbeMultiBurstForPeer(request.ContentID, peerID, phases); err != nil {
+				lastErr = err
+				logger.Error("tracker_udp_probe_response_failed",
+					"contentId", request.ContentID,
+					"requesterPeerId", request.RequesterPeerID,
+					"profile", profile,
+					"target", targetAddr,
+					"error", err.Error(),
+				)
+				continue
+			}
+			succeeded = true
+			logger.Info("tracker_udp_probe_response_sent",
+				"contentId", request.ContentID,
+				"requesterPeerId", request.RequesterPeerID,
+				"profile", profile,
+				"target", targetAddr,
+			)
+			break
+		}
+		if !succeeded {
 			recordUDPBurstOutcome(request.ContentID, request.RequesterPeerID, profile, "probe", false, time.Now())
-			if reportErr := client.ReportUDPProbeResult(context.Background(), peerID, request.RequesterPeerID, request.ContentID, false, trackerProbeErrorKind(err)); reportErr != nil {
+			if reportErr := client.ReportUDPProbeResult(context.Background(), peerID, request.RequesterPeerID, request.ContentID, false, trackerProbeErrorKind(lastErr)); reportErr != nil {
 				logger.Error("tracker_udp_probe_report_failed",
 					"contentId", request.ContentID,
 					"requesterPeerId", request.RequesterPeerID,
@@ -137,13 +157,6 @@ func pollTrackerUDPProbeRequests(logger *logging.Logger, client *tracker.Client,
 					"error", reportErr.Error(),
 				)
 			}
-			logger.Error("tracker_udp_probe_response_failed",
-				"contentId", request.ContentID,
-				"requesterPeerId", request.RequesterPeerID,
-				"profile", profile,
-				"target", targetAddr,
-				"error", err.Error(),
-			)
 			continue
 		}
 		recordUDPBurstOutcome(request.ContentID, request.RequesterPeerID, profile, "probe", true, time.Now())
@@ -155,12 +168,6 @@ func pollTrackerUDPProbeRequests(logger *logging.Logger, client *tracker.Client,
 				"error", reportErr.Error(),
 			)
 		}
-		logger.Info("tracker_udp_probe_response_sent",
-			"contentId", request.ContentID,
-			"requesterPeerId", request.RequesterPeerID,
-			"profile", profile,
-			"target", targetAddr,
-		)
 	}
 	return nil
 }

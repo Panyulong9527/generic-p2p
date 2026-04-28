@@ -53,11 +53,12 @@ type RequestUDPProbeRequest struct {
 }
 
 type UDPProbeTask struct {
-	ContentID        string `json:"contentId"`
-	RequesterPeerID  string `json:"requesterPeerId"`
-	RequesterUDPAddr string `json:"requesterUdpAddr"`
-	ObservedUDPAddr  string `json:"observedUdpAddr,omitempty"`
-	RequestedAt      int64  `json:"requestedAt"`
+	ContentID         string `json:"contentId"`
+	RequesterPeerID   string `json:"requesterPeerId"`
+	RequesterUDPAddr  string `json:"requesterUdpAddr"`
+	ObservedUDPAddr   string `json:"observedUdpAddr,omitempty"`
+	ObservedUDPSource string `json:"observedUdpSource,omitempty"`
+	RequestedAt       int64  `json:"requestedAt"`
 }
 
 type PollUDPProbeRequestsRequest struct {
@@ -491,16 +492,21 @@ func (s *Server) handleRequestUDPProbe(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	task := UDPProbeTask{
-		ContentID:        req.ContentID,
-		RequesterPeerID:  req.RequesterPeerID,
-		RequesterUDPAddr: req.RequesterUDPAddr,
-		ObservedUDPAddr:  observedAddr(r, req.RequesterUDPAddr),
-		RequestedAt:      now.Unix(),
+		ContentID:         req.ContentID,
+		RequesterPeerID:   req.RequesterPeerID,
+		RequesterUDPAddr:  req.RequesterUDPAddr,
+		ObservedUDPAddr:   observedAddr(r, req.RequesterUDPAddr),
+		ObservedUDPSource: "tracker",
+		RequestedAt:       now.Unix(),
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneExpiredLocked(now)
+	if requester := s.peers[req.RequesterPeerID]; strings.TrimSpace(requester.ObservedUDPAddr) != "" {
+		task.ObservedUDPAddr = requester.ObservedUDPAddr
+		task.ObservedUDPSource = requester.ObservedUDPSource
+	}
 	s.udpProbes[req.TargetPeerID] = appendUDPProbeTask(s.udpProbes[req.TargetPeerID], task)
 
 	writeJSON(w, map[string]string{"status": "ok"})

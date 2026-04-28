@@ -212,10 +212,40 @@ func requesterSideBurstPunchTargets(peer tracker.PeerRecord, selfUDPListenAddr s
 		targets = append(targets, addr)
 	}
 
-	appendTarget(peer.ObservedUDPAddr)
+	if strings.TrimSpace(peer.ObservedUDPSource) == "stun" {
+		appendTarget(peer.ObservedUDPAddr)
+	}
 	for _, addr := range peer.UDPAddrs {
 		appendTarget(addr)
 	}
+	if strings.TrimSpace(peer.ObservedUDPSource) != "stun" {
+		appendTarget(peer.ObservedUDPAddr)
+	}
+	return targets
+}
+
+func responderSideBurstPunchTargets(request tracker.UDPProbeTask) []string {
+	targets := make([]string, 0, 2)
+	appendTarget := func(addr string) {
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			return
+		}
+		for _, existing := range targets {
+			if existing == addr {
+				return
+			}
+		}
+		targets = append(targets, addr)
+	}
+
+	if strings.TrimSpace(request.ObservedUDPSource) == "stun" {
+		appendTarget(request.ObservedUDPAddr)
+		appendTarget(request.RequesterUDPAddr)
+		return targets
+	}
+	appendTarget(request.RequesterUDPAddr)
+	appendTarget(request.ObservedUDPAddr)
 	return targets
 }
 
