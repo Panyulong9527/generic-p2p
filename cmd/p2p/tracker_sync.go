@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"generic-p2p/internal/core"
@@ -15,15 +17,58 @@ func syncTrackerProgress(logger *logging.Logger, discovery peerDiscoveryOptions,
 	if discovery.trackerURL == "" || discovery.selfListenAddr == "" {
 		return nil
 	}
-	return syncTrackerPeer(logger, discovery.trackerURL, discovery.selfListenAddr, discovery.selfUDPListenAddr, discovery.contentID, store.CompletedRanges())
+	return syncTrackerPeer(logger, discovery.trackerURL, discovery.selfListenAddr, discovery.selfUDPListenAddr, discovery.stunServer, discovery.contentID, store.CompletedRanges())
 }
 
-func startTrackerSyncLoop(logger *logging.Logger, trackerURL string, peerID string, udpAddr string, contentID string, interval time.Duration, haveRanges func() []core.HaveRange) {
+type stunObservedAddrCache struct {
+	mu        sync.Mutex
+	server    string
+	localAddr string
+	value     string
+	expiresAt time.Time
+}
+
+func (c *stunObservedAddrCache) Resolve(logger *logging.Logger, server string, localAddr string, now time.Time) string {
+	server = strings.TrimSpace(server)
+	localAddr = strings.TrimSpace(localAddr)
+	if server == "" || localAddr == "" {
+		return ""
+	}
+	c.mu.Lock()
+	if c.server == server && c.localAddr == localAddr && now.Before(c.expiresAt) {
+		value := c.value
+		c.mu.Unlock()
+		return value
+	}
+	c.mu.Unlock()
+
+	addr, err := p2pnet.DiscoverSTUNMappedAddr(server, localAddr, 3*time.Second)
+	ttl := 20 * time.Second
+	if err != nil {
+		ttl = 5 * time.Second
+		logger.Error("stun_discovery_failed", "server", server, "localAddr", localAddr, "error", err.Error())
+	}
+
+	c.mu.Lock()
+	c.server = server
+	c.localAddr = localAddr
+	c.value = strings.TrimSpace(addr)
+	c.expiresAt = now.Add(ttl)
+	c.mu.Unlock()
+
+	if strings.TrimSpace(addr) != "" {
+		logger.Info("stun_udp_addr_discovered", "server", server, "localAddr", localAddr, "observedUdpAddr", addr)
+	}
+	return strings.TrimSpace(addr)
+}
+
+func startTrackerSyncLoop(logger *logging.Logger, trackerURL string, peerID string, udpAddr string, stunServer string, contentID string, interval time.Duration, haveRanges func() []core.HaveRange) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	stunCache := &stunObservedAddrCache{}
 
 	syncOnce := func() {
-		if err := syncTrackerPeer(logger, trackerURL, peerID, udpAddr, contentID, haveRanges()); err != nil {
+		if err := syncTrackerPeer(logger, trackerURL, peerID, udpAddr, stunCache.Resolve(logger, stunServer, udpAddr, time.Now()), contentID, haveRanges()); err != nil {
 			logger.Error("tracker_sync_failed", "tracker", trackerURL, "peer", peerID, "contentId", contentID, "error", err.Error())
 		}
 	}
@@ -34,13 +79,13 @@ func startTrackerSyncLoop(logger *logging.Logger, trackerURL string, peerID stri
 	}
 }
 
-func syncTrackerPeer(logger *logging.Logger, trackerURL string, peerID string, udpAddr string, contentID string, haveRanges []core.HaveRange) error {
+func syncTrackerPeer(logger *logging.Logger, trackerURL string, peerID string, udpAddr string, observedUDPAddr string, contentID string, haveRanges []core.HaveRange) error {
 	client := tracker.NewClient(trackerURL)
 	udpAddrs := []string(nil)
 	if udpAddr != "" {
 		udpAddrs = []string{udpAddr}
 	}
-	if err := client.RegisterPeerWithUDP(context.Background(), peerID, []string{peerID}, udpAddrs); err != nil {
+	if err := client.RegisterPeerWithUDPObserved(context.Background(), peerID, []string{peerID}, udpAddrs, observedUDPAddr); err != nil {
 		return fmt.Errorf("register peer: %w", err)
 	}
 	if err := client.JoinSwarm(context.Background(), peerID, contentID, haveRanges); err != nil {

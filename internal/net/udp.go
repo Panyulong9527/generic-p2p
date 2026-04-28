@@ -113,9 +113,10 @@ type udpPendingRequest struct {
 }
 
 type udpSharedSocket struct {
-	conn *net.UDPConn
-	mu   sync.Mutex
-	wait map[string]udpPendingRequest
+	conn    *net.UDPConn
+	mu      sync.Mutex
+	wait    map[string]udpPendingRequest
+	rawWait map[string]chan []byte
 }
 
 var udpObservedPeers = struct {
@@ -203,6 +204,7 @@ func (s *UDPServer) Listen(ctx context.Context) error {
 func (s *UDPServer) handleDatagram(socket *udpSharedSocket, remote *net.UDPAddr, payload []byte) {
 	var message UDPMessage
 	if err := json.Unmarshal(payload, &message); err != nil {
+		_ = socket.deliverRaw(payload)
 		return
 	}
 	if socket.deliver(message) {
@@ -840,8 +842,9 @@ func (c *UDPClient) fetchPieceWithSharedSocket(remote *net.UDPAddr, requestID st
 
 func newUDPSharedSocket(conn *net.UDPConn) *udpSharedSocket {
 	return &udpSharedSocket{
-		conn: conn,
-		wait: make(map[string]udpPendingRequest),
+		conn:    conn,
+		wait:    make(map[string]udpPendingRequest),
+		rawWait: make(map[string]chan []byte),
 	}
 }
 
@@ -853,6 +856,18 @@ func (s *udpSharedSocket) register(requestID string) (<-chan UDPMessage, func())
 	return ch, func() {
 		s.mu.Lock()
 		delete(s.wait, requestID)
+		s.mu.Unlock()
+	}
+}
+
+func (s *udpSharedSocket) registerRaw(key string) (<-chan []byte, func()) {
+	ch := make(chan []byte, 8)
+	s.mu.Lock()
+	s.rawWait[key] = ch
+	s.mu.Unlock()
+	return ch, func() {
+		s.mu.Lock()
+		delete(s.rawWait, key)
 		s.mu.Unlock()
 	}
 }
@@ -870,6 +885,24 @@ func (s *udpSharedSocket) deliver(message UDPMessage) bool {
 	}
 	select {
 	case pending.ch <- message:
+	default:
+	}
+	return true
+}
+
+func (s *udpSharedSocket) deliverRaw(payload []byte) bool {
+	key, ok := stunTransactionKey(payload)
+	if !ok {
+		return false
+	}
+	s.mu.Lock()
+	ch, ok := s.rawWait[key]
+	s.mu.Unlock()
+	if !ok {
+		return false
+	}
+	select {
+	case ch <- append([]byte(nil), payload...):
 	default:
 	}
 	return true

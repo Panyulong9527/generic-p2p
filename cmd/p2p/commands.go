@@ -77,6 +77,7 @@ func runGet(logger *logging.Logger, args []string) error {
 	lan := fs.Bool("lan", false, "enable LAN discovery")
 	lanAddr := fs.String("lan-addr", p2pnet.DefaultLANDiscoveryAddr, "LAN discovery UDP target/listen address")
 	trackerURL := fs.String("tracker", "", "tracker base URL such as http://127.0.0.1:7000")
+	stunServer := fs.String("stun", "", "optional STUN server such as stun.l.google.com:19302")
 	workers := fs.Int("workers", 2, "number of concurrent download workers")
 
 	if err := fs.Parse(args); err != nil {
@@ -143,7 +144,7 @@ func runGet(logger *logging.Logger, args []string) error {
 
 		if *trackerURL != "" {
 			go func() {
-				startTrackerSyncLoop(logger, *trackerURL, *listen, *udpListen, manifest.ContentID, time.Second, store.CompletedRanges)
+				startTrackerSyncLoop(logger, *trackerURL, *listen, *udpListen, *stunServer, manifest.ContentID, time.Second, store.CompletedRanges)
 			}()
 			logger.Info("tracker_sync_ready", "contentId", manifest.ContentID, "tracker", *trackerURL, "peer", *listen)
 		}
@@ -194,6 +195,7 @@ func runGet(logger *logging.Logger, args []string) error {
 		lanEnabled:        *lan,
 		lanAddr:           *lanAddr,
 		trackerURL:        *trackerURL,
+		stunServer:        *stunServer,
 		selfListenAddr:    *listen,
 		selfUDPListenAddr: *udpListen,
 	}
@@ -248,6 +250,7 @@ func runServe(logger *logging.Logger, args []string) error {
 	lan := fs.Bool("lan", false, "enable LAN announcement")
 	lanAddr := fs.String("lan-addr", p2pnet.DefaultLANDiscoveryAddr, "LAN discovery UDP target address")
 	trackerURL := fs.String("tracker", "", "tracker base URL such as http://127.0.0.1:7000")
+	stunServer := fs.String("stun", "", "optional STUN server such as stun.l.google.com:19302")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -331,7 +334,7 @@ func runServe(logger *logging.Logger, args []string) error {
 
 	if *trackerURL != "" {
 		go func() {
-			startTrackerSyncLoop(logger, *trackerURL, *listen, *udpListen, manifest.ContentID, time.Second, func() []core.HaveRange {
+			startTrackerSyncLoop(logger, *trackerURL, *listen, *udpListen, *stunServer, manifest.ContentID, time.Second, func() []core.HaveRange {
 				if len(manifest.Pieces) == 0 {
 					return nil
 				}

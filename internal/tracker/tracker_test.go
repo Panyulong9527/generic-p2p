@@ -88,6 +88,33 @@ func TestTrackerStoresUDPAddrs(t *testing.T) {
 	}
 }
 
+func TestTrackerPrefersObservedUDPAddrHint(t *testing.T) {
+	server := NewServer()
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	client := NewClient(httpServer.URL)
+	ctx := context.Background()
+
+	if err := client.RegisterPeerWithUDPObserved(ctx, "peer-a", []string{"127.0.0.1:9001"}, []string{"127.0.0.1:9003"}, "198.51.100.10:40123"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.JoinSwarm(ctx, "peer-a", "sha256-demo", []core.HaveRange{{Start: 0, End: 1}}); err != nil {
+		t.Fatal(err)
+	}
+
+	peers, err := client.GetPeers(ctx, "sha256-demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(peers) != 1 {
+		t.Fatalf("unexpected peer count: %d", len(peers))
+	}
+	if peers[0].ObservedUDPAddr != "198.51.100.10:40123" {
+		t.Fatalf("expected observed udp addr hint to win, got %s", peers[0].ObservedUDPAddr)
+	}
+}
+
 func TestTrackerCoordinatesUDPProbeRequests(t *testing.T) {
 	server := NewServer()
 	httpServer := httptest.NewServer(server.Handler())
