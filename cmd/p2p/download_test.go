@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -620,6 +621,103 @@ func TestUDPPieceChunkWindowVariesByProfile(t *testing.T) {
 	}
 	if got := udpPieceChunkWindowForCandidate("", scheduler.PeerCandidate{Transport: "udp"}); got != 4 {
 		t.Fatalf("expected default chunk window 4, got %d", got)
+	}
+}
+
+func TestReserveNextPiecePrefersTakeoverOwnerContinuity(t *testing.T) {
+	now := time.Now()
+	contentID := "sha256-reserve-takeover"
+	setUDPContentRouteTakeoverOwner(contentID, "udp://takeover-owner", now)
+
+	manifest := &core.ContentManifest{
+		Version:   1,
+		ContentID: contentID,
+		TotalSize: 12,
+		PieceSize: 4,
+		Pieces: []core.PieceInfo{
+			{Index: 0, Length: 4, Hash: core.HashBytes([]byte("p000"))},
+			{Index: 1, Length: 4, Hash: core.HashBytes([]byte("p111"))},
+			{Index: 2, Length: 4, Hash: core.HashBytes([]byte("p222"))},
+		},
+	}
+	store, err := core.OpenPieceStore(filepath.Join(t.TempDir(), "store"), manifest)
+	if err != nil {
+		t.Fatalf("open piece store: %v", err)
+	}
+	state := &downloadPieceState{inProgress: map[int]bool{}}
+	peers := []scheduler.PeerCandidate{
+		{
+			PeerID:     "udp://takeover-owner",
+			Transport:  "udp",
+			HaveRanges: []core.HaveRange{{Start: 1, End: 2}},
+		},
+		{
+			PeerID:     "udp://other",
+			Transport:  "udp",
+			HaveRanges: []core.HaveRange{{Start: 0, End: 2}},
+		},
+	}
+
+	pieceIndex, ok := reserveNextPiece(manifest, store, state, peers)
+	if !ok {
+		t.Fatal("expected piece reservation")
+	}
+	if pieceIndex != 1 {
+		t.Fatalf("expected takeover-capable rarest piece 1, got %d", pieceIndex)
+	}
+}
+
+func TestReserveNextPieceFallsBackWhenTakeoverOwnerLacksPiece(t *testing.T) {
+	now := time.Now()
+	contentID := "sha256-reserve-fallback"
+	setUDPContentRouteTakeoverOwner(contentID, "udp://takeover-owner", now)
+
+	manifest := &core.ContentManifest{
+		Version:   1,
+		ContentID: contentID,
+		TotalSize: 8,
+		PieceSize: 4,
+		Pieces: []core.PieceInfo{
+			{Index: 0, Length: 4, Hash: core.HashBytes([]byte("p000"))},
+			{Index: 1, Length: 4, Hash: core.HashBytes([]byte("done"))},
+		},
+	}
+	store, err := core.OpenPieceStore(filepath.Join(t.TempDir(), "store"), manifest)
+	if err != nil {
+		t.Fatalf("open piece store: %v", err)
+	}
+	state := &downloadPieceState{inProgress: map[int]bool{}}
+	peers := []scheduler.PeerCandidate{
+		{
+			PeerID:     "udp://takeover-owner",
+			Transport:  "udp",
+			HaveRanges: []core.HaveRange{{Start: 1, End: 1}},
+		},
+		{
+			PeerID:     "udp://other",
+			Transport:  "udp",
+			HaveRanges: []core.HaveRange{{Start: 0, End: 1}},
+		},
+	}
+
+	pieceIndex, ok := reserveNextPiece(manifest, store, state, peers)
+	if !ok {
+		t.Fatal("expected piece reservation")
+	}
+	if pieceIndex != 1 {
+		t.Fatalf("expected fallback rarest-first among owner-capable pieces to choose 1, got %d", pieceIndex)
+	}
+	delete(state.inProgress, pieceIndex)
+	if err := store.PutPiece(1, []byte("done")); err != nil {
+		t.Fatalf("put piece: %v", err)
+	}
+
+	pieceIndex, ok = reserveNextPiece(manifest, store, state, peers)
+	if !ok {
+		t.Fatal("expected second piece reservation")
+	}
+	if pieceIndex != 0 {
+		t.Fatalf("expected fallback to remaining non-owner piece 0, got %d", pieceIndex)
 	}
 }
 

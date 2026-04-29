@@ -1346,6 +1346,11 @@ func reserveNextPiece(manifest *core.ContentManifest, store *core.PieceStore, st
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
+	if pieceIndex, ok := reserveTakeoverOwnerPiece(manifest, store, state, peerCandidates, time.Now()); ok {
+		state.inProgress[pieceIndex] = true
+		return pieceIndex, true
+	}
+
 	chooser := scheduler.Scheduler{}
 	completed := store.CompletedPieceMap()
 	pieceIndex, ok := chooser.ChoosePiece(len(manifest.Pieces), peerCandidates, completed, state.inProgress)
@@ -1354,6 +1359,66 @@ func reserveNextPiece(manifest *core.ContentManifest, store *core.PieceStore, st
 	}
 	state.inProgress[pieceIndex] = true
 	return pieceIndex, true
+}
+
+func reserveTakeoverOwnerPiece(manifest *core.ContentManifest, store *core.PieceStore, state *downloadPieceState, peerCandidates []scheduler.PeerCandidate, now time.Time) (int, bool) {
+	if manifest == nil || strings.TrimSpace(manifest.ContentID) == "" {
+		return 0, false
+	}
+	ownerPeerID := udpContentRouteTakeoverOwner(manifest.ContentID, now)
+	if strings.TrimSpace(ownerPeerID) == "" {
+		return 0, false
+	}
+
+	completed := store.CompletedPieceMap()
+	bestIndex := -1
+	bestAvailability := 0
+	for pieceIndex := 0; pieceIndex < len(manifest.Pieces); pieceIndex++ {
+		if completed[pieceIndex] || state.inProgress[pieceIndex] {
+			continue
+		}
+		if !peerHasPiece(ownerPeerID, pieceIndex, peerCandidates) {
+			continue
+		}
+		availability := candidatePieceAvailability(pieceIndex, peerCandidates)
+		if availability == 0 {
+			continue
+		}
+		if bestIndex == -1 || availability < bestAvailability || (availability == bestAvailability && pieceIndex < bestIndex) {
+			bestIndex = pieceIndex
+			bestAvailability = availability
+		}
+	}
+	if bestIndex == -1 {
+		return 0, false
+	}
+	return bestIndex, true
+}
+
+func peerHasPiece(peerID string, pieceIndex int, peerCandidates []scheduler.PeerCandidate) bool {
+	peerID = strings.TrimSpace(peerID)
+	if peerID == "" {
+		return false
+	}
+	for _, peer := range peerCandidates {
+		if peer.PeerID != peerID {
+			continue
+		}
+		if core.ContainsPiece(peer.HaveRanges, pieceIndex) {
+			return true
+		}
+	}
+	return false
+}
+
+func candidatePieceAvailability(pieceIndex int, peerCandidates []scheduler.PeerCandidate) int {
+	count := 0
+	for _, peer := range peerCandidates {
+		if core.ContainsPiece(peer.HaveRanges, pieceIndex) {
+			count++
+		}
+	}
+	return count
 }
 
 func allPiecesCompleted(manifest *core.ContentManifest, store *core.PieceStore) bool {
