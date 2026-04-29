@@ -23,6 +23,9 @@ func annotatePeerTopology(candidates []scheduler.PeerCandidate, contentID string
 	for i := range annotated {
 		annotated[i].PeerTopologyRole = peerTopologyRoleForCandidate(contentID, annotated[i], now)
 		annotated[i].PathAssistScore = peerAssistScoreForCandidate(contentID, annotated[i], now)
+		if run := udpSessionContentRun(annotated[i].PeerID, contentID, now); run > 0 {
+			annotated[i].PathAssistScore += float64(minInt(run, 3)) * 0.12
+		}
 	}
 	return annotated
 }
@@ -51,6 +54,9 @@ func peerTopologyRoleForCandidate(contentID string, candidate scheduler.PeerCand
 	}
 	if stickyRole := udpSessionStickyRole(candidate.PeerID, contentID, now); stickyRole != "" && !isSuppressedDecisionRisk(candidate.UDPDecisionRisk) {
 		return stickyRole
+	}
+	if udpSessionContentRun(candidate.PeerID, contentID, now) >= 2 && !isSuppressedDecisionRisk(candidate.UDPDecisionRisk) {
+		return peerTopologyRoleBulk
 	}
 	if isSuppressedDecisionRisk(candidate.UDPDecisionRisk) {
 		return peerTopologyRoleFallback

@@ -328,6 +328,9 @@ func TestUDPSessionPieceOwnershipBuildsConsecutiveRuns(t *testing.T) {
 	if session.RecommendedAttemptBudget < 5 {
 		t.Fatalf("expected owner run to strengthen attempt budget, got %+v", session)
 	}
+	if got := udpSessionContentRun(peerID, contentID, now); got != 2 {
+		t.Fatalf("expected content run length 2, got %d", got)
+	}
 }
 
 func TestUDPSessionPieceOwnershipFailureClearsRun(t *testing.T) {
@@ -340,5 +343,28 @@ func TestUDPSessionPieceOwnershipFailureClearsRun(t *testing.T) {
 
 	if got := udpSessionOwnerRun(peerID, contentID, 1, now); got != 0 {
 		t.Fatalf("expected owner run to clear after failure, got %d", got)
+	}
+}
+
+func TestUDPSessionContentRunSharedAcrossWorkers(t *testing.T) {
+	now := time.Now()
+	peerID := "udp://session-content-run"
+	contentID := "sha256-content-run"
+
+	noteUDPSessionPieceOwnership(peerID, "198.51.100.87:9003", contentID, 1, true, now.Add(-4*time.Second))
+	noteUDPSessionPieceOwnership(peerID, "198.51.100.87:9003", contentID, 2, true, now)
+
+	if got := udpSessionContentRun(peerID, contentID, now); got != 2 {
+		t.Fatalf("expected shared content run length 2, got %d", got)
+	}
+	session, ok := udpSessionSnapshot(peerID, now)
+	if !ok {
+		t.Fatal("expected session snapshot")
+	}
+	if session.ContentPieceRuns != 2 {
+		t.Fatalf("expected content piece runs 2, got %+v", session)
+	}
+	if session.RecommendedChunkWindow < 6 {
+		t.Fatalf("expected content run to widen session window, got %+v", session)
 	}
 }

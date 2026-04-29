@@ -16,6 +16,9 @@ type udpPeerSession struct {
 	State                    string
 	PreferredRole            string
 	StickyContentID          string
+	LeaseContentID           string
+	LeaseUntil               time.Time
+	ContentPieceRuns         int
 	OwnerContentID           string
 	OwnerWorkerID            int
 	OwnerUntil               time.Time
@@ -560,6 +563,13 @@ func noteUDPSessionPieceOwnership(peerID string, remoteAddr string, contentID st
 		session.PrimaryAddr = remoteAddr
 	}
 	if success {
+		if session.LeaseContentID == contentID && !session.LeaseUntil.IsZero() && now.Before(session.LeaseUntil) {
+			session.ContentPieceRuns++
+		} else {
+			session.ContentPieceRuns = 1
+		}
+		session.LeaseContentID = contentID
+		session.LeaseUntil = now.Add(25 * time.Second)
 		if session.OwnerContentID == contentID && session.OwnerWorkerID == workerID && !session.OwnerUntil.IsZero() && now.Before(session.OwnerUntil) {
 			session.ConsecutivePieceRuns++
 		} else {
@@ -568,13 +578,39 @@ func noteUDPSessionPieceOwnership(peerID string, remoteAddr string, contentID st
 		session.OwnerContentID = contentID
 		session.OwnerWorkerID = workerID
 		session.OwnerUntil = now.Add(20 * time.Second)
-	} else if session.OwnerContentID == contentID {
-		session.ConsecutivePieceRuns = 0
-		session.OwnerUntil = now.Add(4 * time.Second)
+	} else {
+		if session.LeaseContentID == contentID {
+			if session.ContentPieceRuns > 0 {
+				session.ContentPieceRuns--
+			}
+			if session.ContentPieceRuns == 0 {
+				session.LeaseUntil = now.Add(4 * time.Second)
+			} else {
+				session.LeaseUntil = now.Add(8 * time.Second)
+			}
+		}
+		if session.OwnerContentID == contentID {
+			session.ConsecutivePieceRuns = 0
+			session.OwnerUntil = now.Add(4 * time.Second)
+		}
 	}
 	session.LastActiveAt = now
 	refreshUDPSessionRecommendations(&session, now)
 	udpSessionState.sessions[peerID] = session
+}
+
+func udpSessionContentRun(peerID string, contentID string, now time.Time) int {
+	session, ok := udpSessionSnapshot(peerID, now)
+	if !ok {
+		return 0
+	}
+	if session.LeaseUntil.IsZero() || now.After(session.LeaseUntil) {
+		return 0
+	}
+	if strings.TrimSpace(session.LeaseContentID) != strings.TrimSpace(contentID) {
+		return 0
+	}
+	return session.ContentPieceRuns
 }
 
 func udpSessionOwnerRun(peerID string, contentID string, workerID int, now time.Time) int {
@@ -740,6 +776,11 @@ func refreshUDPSessionRecommendations(session *udpPeerSession, now time.Time) {
 		session.RecommendedChunkWindow = clampSessionChunkWindow(session.RecommendedChunkWindow + session.PipelineDepth)
 		session.RecommendedRoundTimeout = clampSessionRoundTimeout(session.RecommendedRoundTimeout - time.Duration(session.PipelineDepth)*120*time.Millisecond)
 		session.RecommendedAttemptBudget = clampSessionAttemptBudget(session.RecommendedAttemptBudget + session.PipelineDepth)
+	}
+	if !session.LeaseUntil.IsZero() && now.Before(session.LeaseUntil) && session.ContentPieceRuns > 0 {
+		session.RecommendedChunkWindow = clampSessionChunkWindow(session.RecommendedChunkWindow + minInt(session.ContentPieceRuns, 2))
+		session.RecommendedRoundTimeout = clampSessionRoundTimeout(session.RecommendedRoundTimeout - time.Duration(minInt(session.ContentPieceRuns, 2))*60*time.Millisecond)
+		session.RecommendedAttemptBudget = clampSessionAttemptBudget(session.RecommendedAttemptBudget + minInt(session.ContentPieceRuns, 2))
 	}
 	if !session.OwnerUntil.IsZero() && now.Before(session.OwnerUntil) && session.ConsecutivePieceRuns > 0 {
 		session.RecommendedChunkWindow = clampSessionChunkWindow(session.RecommendedChunkWindow + minInt(session.ConsecutivePieceRuns, 2))

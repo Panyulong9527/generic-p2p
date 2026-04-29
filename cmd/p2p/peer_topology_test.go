@@ -137,3 +137,28 @@ func TestAnnotatePeerTopologyForWorkerBoostsOwnedSession(t *testing.T) {
 		t.Fatalf("expected owned session to receive higher assist score, got %+v", candidates)
 	}
 }
+
+func TestAnnotatePeerTopologyPromotesContentRunSessionToBulk(t *testing.T) {
+	now := time.Now()
+	contentID := "sha256-topology-content-run"
+	peerID := "udp://content-run-peer"
+
+	noteUDPSessionPieceOwnership(peerID, "198.51.100.97:9003", contentID, 1, true, now.Add(-3*time.Second))
+	noteUDPSessionPieceOwnership(peerID, "198.51.100.97:9003", contentID, 2, true, now)
+
+	candidates := annotatePeerTopology([]scheduler.PeerCandidate{
+		{
+			PeerID:     peerID,
+			Transport:  "udp",
+			Score:      1.06,
+			HaveRanges: []core.HaveRange{{Start: 0, End: 4}},
+		},
+	}, contentID, now)
+
+	if candidates[0].PeerTopologyRole != peerTopologyRoleBulk {
+		t.Fatalf("expected content-run session to be promoted to bulk, got %s", candidates[0].PeerTopologyRole)
+	}
+	if candidates[0].PathAssistScore <= candidates[0].Score {
+		t.Fatalf("expected content-run assist score boost, got %+v", candidates[0])
+	}
+}
