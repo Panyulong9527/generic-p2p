@@ -306,3 +306,39 @@ func TestUDPSessionPipelineBoostCoolsAfterEmptyRound(t *testing.T) {
 		t.Fatal("expected pipeline boost to cool down after empty round")
 	}
 }
+
+func TestUDPSessionPieceOwnershipBuildsConsecutiveRuns(t *testing.T) {
+	now := time.Now()
+	peerID := "udp://session-owner-run"
+	contentID := "sha256-owner-run"
+
+	noteUDPSessionPieceOwnership(peerID, "198.51.100.85:9003", contentID, 2, true, now.Add(-3*time.Second))
+	noteUDPSessionPieceOwnership(peerID, "198.51.100.85:9003", contentID, 2, true, now)
+
+	if got := udpSessionOwnerRun(peerID, contentID, 2, now); got != 2 {
+		t.Fatalf("expected owner run length 2, got %d", got)
+	}
+	session, ok := udpSessionSnapshot(peerID, now)
+	if !ok {
+		t.Fatal("expected session snapshot")
+	}
+	if session.ConsecutivePieceRuns != 2 {
+		t.Fatalf("expected consecutive piece runs 2, got %+v", session)
+	}
+	if session.RecommendedAttemptBudget < 5 {
+		t.Fatalf("expected owner run to strengthen attempt budget, got %+v", session)
+	}
+}
+
+func TestUDPSessionPieceOwnershipFailureClearsRun(t *testing.T) {
+	now := time.Now()
+	peerID := "udp://session-owner-reset"
+	contentID := "sha256-owner-reset"
+
+	noteUDPSessionPieceOwnership(peerID, "198.51.100.86:9003", contentID, 1, true, now.Add(-3*time.Second))
+	noteUDPSessionPieceOwnership(peerID, "198.51.100.86:9003", contentID, 1, false, now)
+
+	if got := udpSessionOwnerRun(peerID, contentID, 1, now); got != 0 {
+		t.Fatalf("expected owner run to clear after failure, got %d", got)
+	}
+}

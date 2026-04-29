@@ -27,6 +27,21 @@ func annotatePeerTopology(candidates []scheduler.PeerCandidate, contentID string
 	return annotated
 }
 
+func annotatePeerTopologyForWorker(candidates []scheduler.PeerCandidate, contentID string, workerID int, now time.Time) []scheduler.PeerCandidate {
+	annotated := annotatePeerTopology(candidates, contentID, now)
+	if workerID < 0 {
+		return annotated
+	}
+	for i := range annotated {
+		run := udpSessionOwnerRun(annotated[i].PeerID, contentID, workerID, now)
+		if run <= 0 {
+			continue
+		}
+		annotated[i].PathAssistScore += float64(minInt(run, 3)) * 0.18
+	}
+	return annotated
+}
+
 func peerTopologyRoleForCandidate(contentID string, candidate scheduler.PeerCandidate, now time.Time) string {
 	if candidate.Transport != "udp" {
 		return peerTopologyRoleBackup

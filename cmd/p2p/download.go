@@ -150,7 +150,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 			syncRuntimeUDPBurstProfiles(logger, store, discovery, manifest.ContentID, udpBurstReports)
 		}
 		peerCandidates = annotateUDPChunkProgress(peerCandidates, manifest.ContentID, time.Now())
-		peerCandidates = annotatePeerTopology(peerCandidates, manifest.ContentID, time.Now())
+		peerCandidates = annotatePeerTopologyForWorker(peerCandidates, manifest.ContentID, workerID, time.Now())
 
 		selected, ok := chooser.ChoosePeer(pieceIndex, peerCandidates)
 		if !ok {
@@ -181,6 +181,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 				if candidate.Transport == "udp" {
 					recordUDPBurstOutcome(manifest.ContentID, candidate.PeerID, normalizedBurstProfile(candidate.BurstProfile), "piece", false, time.Now())
 					noteUDPSessionStageFailure(candidate.PeerID, candidate.Addr, "piece", transferErrorKind(candidate, lastErr), time.Now())
+					noteUDPSessionPieceOwnership(candidate.PeerID, candidate.Addr, manifest.ContentID, workerID, false, time.Now())
 				}
 				errorKind := transferErrorKind(candidate, lastErr)
 				cooldown := peerHealth.MarkFailureKind(candidate.PeerID, errorKind, time.Now())
@@ -207,6 +208,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 				recordUDPBurstOutcome(manifest.ContentID, candidate.PeerID, normalizedBurstProfile(candidate.BurstProfile), "piece", true, time.Now())
 				p2pnet.RememberRecentUDPSuccess(manifest.ContentID, candidate.Addr, time.Now())
 				noteUDPSessionStageSuccess(candidate.PeerID, candidate.Addr, "piece", manifest.ContentID, time.Now())
+				noteUDPSessionPieceOwnership(candidate.PeerID, candidate.Addr, manifest.ContentID, workerID, true, time.Now())
 			}
 			break
 		}

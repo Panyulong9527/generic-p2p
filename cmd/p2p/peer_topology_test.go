@@ -108,3 +108,32 @@ func TestAnnotatePeerTopologyUsesQuarantineFallback(t *testing.T) {
 		t.Fatalf("expected quarantine fallback role, got %s", candidates[0].PeerTopologyRole)
 	}
 }
+
+func TestAnnotatePeerTopologyForWorkerBoostsOwnedSession(t *testing.T) {
+	now := time.Now()
+	contentID := "sha256-topology-owner"
+	ownedPeer := "udp://owned-peer"
+	otherPeer := "udp://other-peer"
+
+	noteUDPSessionPieceOwnership(ownedPeer, "198.51.100.96:9003", contentID, 3, true, now.Add(-3*time.Second))
+	noteUDPSessionPieceOwnership(ownedPeer, "198.51.100.96:9003", contentID, 3, true, now)
+
+	candidates := annotatePeerTopologyForWorker([]scheduler.PeerCandidate{
+		{
+			PeerID:     ownedPeer,
+			Transport:  "udp",
+			Score:      1.10,
+			HaveRanges: []core.HaveRange{{Start: 0, End: 4}},
+		},
+		{
+			PeerID:     otherPeer,
+			Transport:  "udp",
+			Score:      1.10,
+			HaveRanges: []core.HaveRange{{Start: 0, End: 4}},
+		},
+	}, contentID, 3, now)
+
+	if candidates[0].PathAssistScore <= candidates[1].PathAssistScore {
+		t.Fatalf("expected owned session to receive higher assist score, got %+v", candidates)
+	}
+}
