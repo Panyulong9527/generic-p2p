@@ -368,3 +368,20 @@ func TestUDPSessionContentRunSharedAcrossWorkers(t *testing.T) {
 		t.Fatalf("expected content run to widen session window, got %+v", session)
 	}
 }
+
+func TestUDPSessionContentRunFailureEntersHandoff(t *testing.T) {
+	now := time.Now()
+	peerID := "udp://session-handoff"
+	contentID := "sha256-session-handoff"
+
+	noteUDPSessionPieceOwnership(peerID, "198.51.100.88:9003", contentID, 1, true, now.Add(-5*time.Second))
+	noteUDPSessionPieceOwnership(peerID, "198.51.100.88:9003", contentID, 2, true, now.Add(-2*time.Second))
+	noteUDPSessionPieceOwnership(peerID, "198.51.100.88:9003", contentID, 2, false, now)
+
+	if !udpSessionInHandoff(peerID, contentID, now) {
+		t.Fatal("expected session to enter handoff after content-run failure")
+	}
+	if got := udpSessionContentRun(peerID, contentID, now); got != 1 {
+		t.Fatalf("expected content run to decay to 1, got %d", got)
+	}
+}

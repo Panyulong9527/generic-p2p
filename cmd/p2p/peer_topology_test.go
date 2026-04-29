@@ -162,3 +162,26 @@ func TestAnnotatePeerTopologyPromotesContentRunSessionToBulk(t *testing.T) {
 		t.Fatalf("expected content-run assist score boost, got %+v", candidates[0])
 	}
 }
+
+func TestAnnotatePeerTopologyMovesHandoffSessionToBackup(t *testing.T) {
+	now := time.Now()
+	contentID := "sha256-topology-handoff"
+	peerID := "udp://handoff-peer"
+
+	noteUDPSessionPieceOwnership(peerID, "198.51.100.98:9003", contentID, 1, true, now.Add(-5*time.Second))
+	noteUDPSessionPieceOwnership(peerID, "198.51.100.98:9003", contentID, 2, true, now.Add(-2*time.Second))
+	noteUDPSessionPieceOwnership(peerID, "198.51.100.98:9003", contentID, 2, false, now)
+
+	candidates := annotatePeerTopology([]scheduler.PeerCandidate{
+		{
+			PeerID:     peerID,
+			Transport:  "udp",
+			Score:      1.14,
+			HaveRanges: []core.HaveRange{{Start: 0, End: 4}},
+		},
+	}, contentID, now)
+
+	if candidates[0].PeerTopologyRole != peerTopologyRoleBackup {
+		t.Fatalf("expected handoff session to move to backup, got %s", candidates[0].PeerTopologyRole)
+	}
+}

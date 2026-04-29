@@ -19,6 +19,8 @@ type udpPeerSession struct {
 	LeaseContentID           string
 	LeaseUntil               time.Time
 	ContentPieceRuns         int
+	HandoffContentID         string
+	HandoffUntil             time.Time
 	OwnerContentID           string
 	OwnerWorkerID            int
 	OwnerUntil               time.Time
@@ -563,6 +565,8 @@ func noteUDPSessionPieceOwnership(peerID string, remoteAddr string, contentID st
 		session.PrimaryAddr = remoteAddr
 	}
 	if success {
+		session.HandoffContentID = ""
+		session.HandoffUntil = time.Time{}
 		if session.LeaseContentID == contentID && !session.LeaseUntil.IsZero() && now.Before(session.LeaseUntil) {
 			session.ContentPieceRuns++
 		} else {
@@ -588,6 +592,10 @@ func noteUDPSessionPieceOwnership(peerID string, remoteAddr string, contentID st
 			} else {
 				session.LeaseUntil = now.Add(8 * time.Second)
 			}
+			if session.ContentPieceRuns <= 1 {
+				session.HandoffContentID = contentID
+				session.HandoffUntil = now.Add(14 * time.Second)
+			}
 		}
 		if session.OwnerContentID == contentID {
 			session.ConsecutivePieceRuns = 0
@@ -611,6 +619,20 @@ func udpSessionContentRun(peerID string, contentID string, now time.Time) int {
 		return 0
 	}
 	return session.ContentPieceRuns
+}
+
+func udpSessionInHandoff(peerID string, contentID string, now time.Time) bool {
+	session, ok := udpSessionSnapshot(peerID, now)
+	if !ok {
+		return false
+	}
+	if session.HandoffUntil.IsZero() || now.After(session.HandoffUntil) {
+		return false
+	}
+	if strings.TrimSpace(session.HandoffContentID) != strings.TrimSpace(contentID) {
+		return false
+	}
+	return true
 }
 
 func udpSessionOwnerRun(peerID string, contentID string, workerID int, now time.Time) int {

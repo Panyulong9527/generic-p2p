@@ -55,6 +55,9 @@ func peerTopologyRoleForCandidate(contentID string, candidate scheduler.PeerCand
 	if stickyRole := udpSessionStickyRole(candidate.PeerID, contentID, now); stickyRole != "" && !isSuppressedDecisionRisk(candidate.UDPDecisionRisk) {
 		return stickyRole
 	}
+	if udpSessionInHandoff(candidate.PeerID, contentID, now) {
+		return peerTopologyRoleBackup
+	}
 	if udpSessionContentRun(candidate.PeerID, contentID, now) >= 2 && !isSuppressedDecisionRisk(candidate.UDPDecisionRisk) {
 		return peerTopologyRoleBulk
 	}
@@ -105,6 +108,9 @@ func peerAssistScoreForCandidate(contentID string, candidate scheduler.PeerCandi
 		}
 		if udpSessionIsQuarantined(candidate.PeerID, now) {
 			score -= 0.24
+		}
+		if udpSessionInHandoff(candidate.PeerID, contentID, now) {
+			score -= 0.08
 		}
 		if candidate.UDPPublicMapped {
 			score += 0.10
