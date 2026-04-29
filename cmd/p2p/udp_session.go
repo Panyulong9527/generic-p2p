@@ -57,6 +57,22 @@ var udpSessionState = struct {
 	sessions: make(map[string]udpPeerSession),
 }
 
+type udpContentRouteLease struct {
+	ContentID     string
+	OwnerPeerID   string
+	HandoffPeerID string
+	TakeoverUntil time.Time
+	HandoffUntil  time.Time
+	LastUpdatedAt time.Time
+}
+
+var udpContentRouteState = struct {
+	mu     sync.Mutex
+	leases map[string]udpContentRouteLease
+}{
+	leases: make(map[string]udpContentRouteLease),
+}
+
 func noteUDPSessionAddr(peerID string, remoteAddr string, source string, contentID string, now time.Time) {
 	peerID = strings.TrimSpace(peerID)
 	remoteAddr = strings.TrimSpace(remoteAddr)
@@ -567,6 +583,7 @@ func noteUDPSessionPieceOwnership(peerID string, remoteAddr string, contentID st
 	if success {
 		session.HandoffContentID = ""
 		session.HandoffUntil = time.Time{}
+		noteUDPContentRouteSuccess(contentID, peerID, now)
 		if session.LeaseContentID == contentID && !session.LeaseUntil.IsZero() && now.Before(session.LeaseUntil) {
 			session.ContentPieceRuns++
 		} else {
@@ -595,6 +612,7 @@ func noteUDPSessionPieceOwnership(peerID string, remoteAddr string, contentID st
 			if session.ContentPieceRuns <= 1 {
 				session.HandoffContentID = contentID
 				session.HandoffUntil = now.Add(14 * time.Second)
+				noteUDPContentRouteHandoff(contentID, peerID, now)
 			}
 		}
 		if session.OwnerContentID == contentID {
@@ -633,6 +651,98 @@ func udpSessionInHandoff(peerID string, contentID string, now time.Time) bool {
 		return false
 	}
 	return true
+}
+
+func noteUDPContentRouteSuccess(contentID string, peerID string, now time.Time) {
+	contentID = strings.TrimSpace(contentID)
+	peerID = strings.TrimSpace(peerID)
+	if contentID == "" || peerID == "" {
+		return
+	}
+	udpContentRouteState.mu.Lock()
+	defer udpContentRouteState.mu.Unlock()
+	lease := udpContentRouteState.leases[contentID]
+	lease.ContentID = contentID
+	lease.OwnerPeerID = peerID
+	lease.HandoffPeerID = ""
+	lease.TakeoverUntil = now.Add(18 * time.Second)
+	lease.HandoffUntil = time.Time{}
+	lease.LastUpdatedAt = now
+	udpContentRouteState.leases[contentID] = lease
+}
+
+func noteUDPContentRouteHandoff(contentID string, peerID string, now time.Time) {
+	contentID = strings.TrimSpace(contentID)
+	peerID = strings.TrimSpace(peerID)
+	if contentID == "" || peerID == "" {
+		return
+	}
+	udpContentRouteState.mu.Lock()
+	defer udpContentRouteState.mu.Unlock()
+	lease := udpContentRouteState.leases[contentID]
+	lease.ContentID = contentID
+	lease.HandoffPeerID = peerID
+	lease.HandoffUntil = now.Add(14 * time.Second)
+	if lease.OwnerPeerID == peerID {
+		lease.OwnerPeerID = ""
+		lease.TakeoverUntil = time.Time{}
+	}
+	lease.LastUpdatedAt = now
+	udpContentRouteState.leases[contentID] = lease
+}
+
+func udpContentRouteLeaseSnapshot(contentID string, now time.Time) (udpContentRouteLease, bool) {
+	contentID = strings.TrimSpace(contentID)
+	if contentID == "" {
+		return udpContentRouteLease{}, false
+	}
+	udpContentRouteState.mu.Lock()
+	defer udpContentRouteState.mu.Unlock()
+	lease, ok := udpContentRouteState.leases[contentID]
+	if !ok {
+		return udpContentRouteLease{}, false
+	}
+	if (!lease.TakeoverUntil.IsZero() && now.After(lease.TakeoverUntil)) && (!lease.HandoffUntil.IsZero() && now.After(lease.HandoffUntil)) {
+		delete(udpContentRouteState.leases, contentID)
+		return udpContentRouteLease{}, false
+	}
+	if !lease.TakeoverUntil.IsZero() && now.After(lease.TakeoverUntil) {
+		lease.OwnerPeerID = ""
+		lease.TakeoverUntil = time.Time{}
+	}
+	if !lease.HandoffUntil.IsZero() && now.After(lease.HandoffUntil) {
+		lease.HandoffPeerID = ""
+		lease.HandoffUntil = time.Time{}
+	}
+	udpContentRouteState.leases[contentID] = lease
+	return lease, true
+}
+
+func udpContentRouteTakeoverOwner(contentID string, now time.Time) string {
+	lease, ok := udpContentRouteLeaseSnapshot(contentID, now)
+	if !ok {
+		return ""
+	}
+	if lease.TakeoverUntil.IsZero() || now.After(lease.TakeoverUntil) {
+		return ""
+	}
+	return strings.TrimSpace(lease.OwnerPeerID)
+}
+
+func setUDPContentRouteTakeoverOwner(contentID string, ownerPeerID string, now time.Time) {
+	contentID = strings.TrimSpace(contentID)
+	ownerPeerID = strings.TrimSpace(ownerPeerID)
+	if contentID == "" || ownerPeerID == "" {
+		return
+	}
+	udpContentRouteState.mu.Lock()
+	defer udpContentRouteState.mu.Unlock()
+	lease := udpContentRouteState.leases[contentID]
+	lease.ContentID = contentID
+	lease.OwnerPeerID = ownerPeerID
+	lease.TakeoverUntil = now.Add(12 * time.Second)
+	lease.LastUpdatedAt = now
+	udpContentRouteState.leases[contentID] = lease
 }
 
 func udpSessionOwnerRun(peerID string, contentID string, workerID int, now time.Time) int {

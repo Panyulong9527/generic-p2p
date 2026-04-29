@@ -185,3 +185,41 @@ func TestAnnotatePeerTopologyMovesHandoffSessionToBackup(t *testing.T) {
 		t.Fatalf("expected handoff session to move to backup, got %s", candidates[0].PeerTopologyRole)
 	}
 }
+
+func TestAnnotatePeerTopologySelectsTakeoverOwnerDuringHandoff(t *testing.T) {
+	now := time.Now()
+	contentID := "sha256-topology-takeover"
+	handoffPeer := "udp://handoff-source"
+	takeoverPeer := "udp://takeover-peer"
+
+	noteUDPSessionPieceOwnership(handoffPeer, "198.51.100.101:9003", contentID, 1, true, now.Add(-6*time.Second))
+	noteUDPSessionPieceOwnership(handoffPeer, "198.51.100.101:9003", contentID, 1, true, now.Add(-3*time.Second))
+	noteUDPSessionPieceOwnership(handoffPeer, "198.51.100.101:9003", contentID, 1, false, now)
+	noteUDPSessionStageSuccess(takeoverPeer, "198.51.100.102:9003", "piece", contentID, now.Add(-2*time.Second))
+
+	candidates := annotatePeerTopology([]scheduler.PeerCandidate{
+		{
+			PeerID:     handoffPeer,
+			Transport:  "udp",
+			Score:      1.18,
+			HaveRanges: []core.HaveRange{{Start: 0, End: 4}},
+		},
+		{
+			PeerID:          takeoverPeer,
+			Transport:       "udp",
+			Score:           1.16,
+			UDPDecisionRisk: "recovering",
+			HaveRanges:      []core.HaveRange{{Start: 0, End: 4}},
+		},
+	}, contentID, now)
+
+	if candidates[1].PeerTopologyRole != peerTopologyRoleBulk {
+		t.Fatalf("expected takeover peer to be promoted to bulk, got %+v", candidates)
+	}
+	if candidates[1].PathAssistScore <= candidates[0].PathAssistScore {
+		t.Fatalf("expected takeover owner assist score boost, got %+v", candidates)
+	}
+	if owner := udpContentRouteTakeoverOwner(contentID, now); owner != takeoverPeer {
+		t.Fatalf("expected takeover owner %s, got %s", takeoverPeer, owner)
+	}
+}

@@ -384,4 +384,11 @@ func TestUDPSessionContentRunFailureEntersHandoff(t *testing.T) {
 	if got := udpSessionContentRun(peerID, contentID, now); got != 1 {
 		t.Fatalf("expected content run to decay to 1, got %d", got)
 	}
+	lease, ok := udpContentRouteLeaseSnapshot(contentID, now)
+	if !ok {
+		t.Fatal("expected content route lease after handoff")
+	}
+	if lease.HandoffPeerID != peerID {
+		t.Fatalf("expected handoff peer %s, got %+v", peerID, lease)
+	}
 }

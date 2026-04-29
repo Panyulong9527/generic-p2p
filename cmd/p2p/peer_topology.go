@@ -27,6 +27,7 @@ func annotatePeerTopology(candidates []scheduler.PeerCandidate, contentID string
 			annotated[i].PathAssistScore += float64(minInt(run, 3)) * 0.12
 		}
 	}
+	annotated = applyUDPContentRouteTakeover(annotated, contentID, now)
 	return annotated
 }
 
@@ -129,6 +130,87 @@ func peerAssistScoreForCandidate(contentID string, candidate scheduler.PeerCandi
 		}
 	}
 	return score
+}
+
+func applyUDPContentRouteTakeover(candidates []scheduler.PeerCandidate, contentID string, now time.Time) []scheduler.PeerCandidate {
+	if len(candidates) == 0 || strings.TrimSpace(contentID) == "" {
+		return candidates
+	}
+	lease, ok := udpContentRouteLeaseSnapshot(contentID, now)
+	if !ok || lease.HandoffPeerID == "" || lease.HandoffUntil.IsZero() || now.After(lease.HandoffUntil) {
+		return candidates
+	}
+	ownerPeerID := strings.TrimSpace(lease.OwnerPeerID)
+	if ownerPeerID == "" || !candidateEligibleForTakeover(candidates, ownerPeerID, lease.HandoffPeerID) {
+		ownerPeerID = selectUDPContentTakeoverOwner(candidates, lease.HandoffPeerID)
+		if ownerPeerID == "" {
+			return candidates
+		}
+		setUDPContentRouteTakeoverOwner(contentID, ownerPeerID, now)
+	}
+	annotated := make([]scheduler.PeerCandidate, len(candidates))
+	copy(annotated, candidates)
+	for i := range annotated {
+		if annotated[i].PeerID != ownerPeerID {
+			continue
+		}
+		annotated[i].PathAssistScore += 0.32
+		switch annotated[i].Transport {
+		case "udp":
+			if strings.TrimSpace(annotated[i].PeerTopologyRole) != peerTopologyRoleFallback {
+				annotated[i].PeerTopologyRole = peerTopologyRoleBulk
+			}
+		default:
+			annotated[i].PeerTopologyRole = peerTopologyRoleBackup
+		}
+	}
+	return annotated
+}
+
+func selectUDPContentTakeoverOwner(candidates []scheduler.PeerCandidate, handoffPeerID string) string {
+	bestPeerID := ""
+	bestAssistScore := -1e9
+	bestRawScore := -1e9
+	bestPriority := 99
+	for _, candidate := range candidates {
+		if !candidateEligibleForTakeover(candidates, candidate.PeerID, handoffPeerID) {
+			continue
+		}
+		priority := peerTopologyRolePriority(candidate.PeerTopologyRole)
+		if priority > peerTopologyRolePriority(peerTopologyRoleAssist) {
+			continue
+		}
+		if priority < bestPriority ||
+			(priority == bestPriority && candidate.PathAssistScore > bestAssistScore) ||
+			(priority == bestPriority && candidate.PathAssistScore == bestAssistScore && candidate.Score > bestRawScore) {
+			bestPeerID = candidate.PeerID
+			bestPriority = priority
+			bestAssistScore = candidate.PathAssistScore
+			bestRawScore = candidate.Score
+		}
+	}
+	return bestPeerID
+}
+
+func candidateEligibleForTakeover(candidates []scheduler.PeerCandidate, peerID string, handoffPeerID string) bool {
+	peerID = strings.TrimSpace(peerID)
+	handoffPeerID = strings.TrimSpace(handoffPeerID)
+	if peerID == "" || peerID == handoffPeerID {
+		return false
+	}
+	for _, candidate := range candidates {
+		if candidate.PeerID != peerID {
+			continue
+		}
+		if strings.TrimSpace(candidate.PeerTopologyRole) == peerTopologyRoleFallback {
+			return false
+		}
+		if strings.TrimSpace(candidate.UDPDecisionRisk) == "low" {
+			return false
+		}
+		return true
+	}
+	return false
 }
 
 func peerTopologyRolePriority(role string) int {
