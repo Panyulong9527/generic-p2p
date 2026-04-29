@@ -567,8 +567,10 @@ func noteUDPSessionPieceOwnership(peerID string, remoteAddr string, contentID st
 		return
 	}
 
+	shouldMarkRouteSuccess := false
+	shouldMarkRouteHandoff := false
+
 	udpSessionState.mu.Lock()
-	defer udpSessionState.mu.Unlock()
 
 	session := udpSessionState.sessions[peerID]
 	session.PeerID = peerID
@@ -585,7 +587,7 @@ func noteUDPSessionPieceOwnership(peerID string, remoteAddr string, contentID st
 	if success {
 		session.HandoffContentID = ""
 		session.HandoffUntil = time.Time{}
-		noteUDPContentRouteSuccess(contentID, peerID, now)
+		shouldMarkRouteSuccess = true
 		if session.LeaseContentID == contentID && !session.LeaseUntil.IsZero() && now.Before(session.LeaseUntil) {
 			session.ContentPieceRuns++
 		} else {
@@ -614,7 +616,7 @@ func noteUDPSessionPieceOwnership(peerID string, remoteAddr string, contentID st
 			if session.ContentPieceRuns <= 1 {
 				session.HandoffContentID = contentID
 				session.HandoffUntil = now.Add(14 * time.Second)
-				noteUDPContentRouteHandoff(contentID, peerID, now)
+				shouldMarkRouteHandoff = true
 			}
 		}
 		if session.OwnerContentID == contentID {
@@ -625,6 +627,14 @@ func noteUDPSessionPieceOwnership(peerID string, remoteAddr string, contentID st
 	session.LastActiveAt = now
 	refreshUDPSessionRecommendations(&session, now)
 	udpSessionState.sessions[peerID] = session
+	udpSessionState.mu.Unlock()
+
+	if shouldMarkRouteSuccess {
+		noteUDPContentRouteSuccess(contentID, peerID, now)
+	}
+	if shouldMarkRouteHandoff {
+		noteUDPContentRouteHandoff(contentID, peerID, now)
+	}
 }
 
 func udpSessionContentRun(peerID string, contentID string, now time.Time) int {
@@ -669,7 +679,7 @@ func noteUDPContentRouteSuccess(contentID string, peerID string, now time.Time) 
 	lease.HandoffPeerID = ""
 	lease.TakeoverUntil = now.Add(18 * time.Second)
 	lease.HandoffUntil = time.Time{}
-	lease.InflightLimit = maxInt(lease.InflightLimit, 2)
+	lease.InflightLimit = suggestedUDPContentRouteInflightLimit(contentID, peerID, now)
 	lease.LastUpdatedAt = now
 	udpContentRouteState.leases[contentID] = lease
 }
@@ -744,7 +754,7 @@ func setUDPContentRouteTakeoverOwner(contentID string, ownerPeerID string, now t
 	lease.ContentID = contentID
 	lease.OwnerPeerID = ownerPeerID
 	lease.TakeoverUntil = now.Add(12 * time.Second)
-	lease.InflightLimit = maxInt(lease.InflightLimit, 2)
+	lease.InflightLimit = suggestedUDPContentRouteInflightLimit(contentID, ownerPeerID, now)
 	lease.LastUpdatedAt = now
 	udpContentRouteState.leases[contentID] = lease
 }
@@ -761,8 +771,8 @@ func udpContentRouteTakeoverAvailable(contentID string, peerID string, now time.
 		return false
 	}
 	limit := lease.InflightLimit
-	if limit <= 0 {
-		limit = 2
+	if current := suggestedUDPContentRouteInflightLimit(contentID, peerID, now); current > 0 {
+		limit = current
 	}
 	return lease.InflightCount < limit
 }
@@ -779,8 +789,8 @@ func beginUDPContentRouteInflight(contentID string, peerID string, now time.Time
 	if !ok || strings.TrimSpace(lease.OwnerPeerID) != peerID || lease.TakeoverUntil.IsZero() || now.After(lease.TakeoverUntil) {
 		return false
 	}
-	if lease.InflightLimit <= 0 {
-		lease.InflightLimit = 2
+	if current := suggestedUDPContentRouteInflightLimit(contentID, peerID, now); current > 0 {
+		lease.InflightLimit = current
 	}
 	if lease.InflightCount >= lease.InflightLimit {
 		udpContentRouteState.leases[contentID] = lease
@@ -809,6 +819,23 @@ func finishUDPContentRouteInflight(contentID string, peerID string, now time.Tim
 	}
 	lease.LastUpdatedAt = now
 	udpContentRouteState.leases[contentID] = lease
+}
+
+func suggestedUDPContentRouteInflightLimit(contentID string, peerID string, now time.Time) int {
+	session, ok := udpSessionSnapshot(peerID, now)
+	if !ok {
+		return 2
+	}
+	if udpSessionInHandoff(peerID, contentID, now) || strings.TrimSpace(session.State) == "cooling" {
+		return 1
+	}
+	if session.RecommendedAttemptBudget >= 5 || (session.HealthScore >= 0.45 && session.SuccessStreak >= 2) {
+		return 3
+	}
+	if session.RecommendedAttemptBudget <= 2 || session.HealthScore < 0 {
+		return 1
+	}
+	return 2
 }
 
 func udpSessionOwnerRun(peerID string, contentID string, workerID int, now time.Time) int {

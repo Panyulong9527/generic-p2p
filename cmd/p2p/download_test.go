@@ -815,6 +815,44 @@ func TestUDPContentRouteInflightQuotaReleases(t *testing.T) {
 	}
 }
 
+func TestUDPContentRouteInflightQuotaExpandsForHealthySession(t *testing.T) {
+	now := time.Now()
+	contentID := "sha256-takeover-inflight-healthy"
+	peerID := "udp://healthy-owner"
+
+	noteUDPSessionStageSuccess(peerID, "198.51.100.141:9003", "probe", contentID, now.Add(-10*time.Second))
+	noteUDPSessionStageSuccess(peerID, "198.51.100.141:9003", "have", contentID, now.Add(-6*time.Second))
+	noteUDPSessionStageSuccess(peerID, "198.51.100.141:9003", "piece", contentID, now.Add(-2*time.Second))
+	setUDPContentRouteTakeoverOwner(contentID, peerID, now)
+
+	if !beginUDPContentRouteInflight(contentID, peerID, now) ||
+		!beginUDPContentRouteInflight(contentID, peerID, now) ||
+		!beginUDPContentRouteInflight(contentID, peerID, now) {
+		t.Fatal("expected healthy takeover session to allow 3 inflight acquisitions")
+	}
+	if beginUDPContentRouteInflight(contentID, peerID, now) {
+		t.Fatal("expected fourth inflight acquisition to fail")
+	}
+}
+
+func TestUDPContentRouteInflightQuotaShrinksForHandoffSession(t *testing.T) {
+	now := time.Now()
+	contentID := "sha256-takeover-inflight-handoff"
+	peerID := "udp://handoff-owner"
+
+	noteUDPSessionPieceOwnership(peerID, "198.51.100.151:9003", contentID, 1, true, now.Add(-5*time.Second))
+	noteUDPSessionPieceOwnership(peerID, "198.51.100.151:9003", contentID, 1, true, now.Add(-2*time.Second))
+	noteUDPSessionPieceOwnership(peerID, "198.51.100.151:9003", contentID, 1, false, now)
+	setUDPContentRouteTakeoverOwner(contentID, peerID, now)
+
+	if !beginUDPContentRouteInflight(contentID, peerID, now) {
+		t.Fatal("expected first inflight acquisition for handoff session")
+	}
+	if beginUDPContentRouteInflight(contentID, peerID, now) {
+		t.Fatal("expected handoff session to cap inflight quota at 1")
+	}
+}
+
 func TestUDPPieceChunkWindowAdjustsByStageRiskAndPublicMapping(t *testing.T) {
 	now := time.Now()
 	const contentID = "sha256-download-window-stage"
