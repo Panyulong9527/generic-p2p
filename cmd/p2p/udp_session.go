@@ -63,6 +63,8 @@ type udpContentRouteLease struct {
 	HandoffPeerID string
 	TakeoverUntil time.Time
 	HandoffUntil  time.Time
+	InflightCount int
+	InflightLimit int
 	LastUpdatedAt time.Time
 }
 
@@ -667,6 +669,7 @@ func noteUDPContentRouteSuccess(contentID string, peerID string, now time.Time) 
 	lease.HandoffPeerID = ""
 	lease.TakeoverUntil = now.Add(18 * time.Second)
 	lease.HandoffUntil = time.Time{}
+	lease.InflightLimit = maxInt(lease.InflightLimit, 2)
 	lease.LastUpdatedAt = now
 	udpContentRouteState.leases[contentID] = lease
 }
@@ -741,6 +744,69 @@ func setUDPContentRouteTakeoverOwner(contentID string, ownerPeerID string, now t
 	lease.ContentID = contentID
 	lease.OwnerPeerID = ownerPeerID
 	lease.TakeoverUntil = now.Add(12 * time.Second)
+	lease.InflightLimit = maxInt(lease.InflightLimit, 2)
+	lease.LastUpdatedAt = now
+	udpContentRouteState.leases[contentID] = lease
+}
+
+func udpContentRouteTakeoverAvailable(contentID string, peerID string, now time.Time) bool {
+	lease, ok := udpContentRouteLeaseSnapshot(contentID, now)
+	if !ok {
+		return false
+	}
+	if strings.TrimSpace(lease.OwnerPeerID) != strings.TrimSpace(peerID) {
+		return false
+	}
+	if lease.TakeoverUntil.IsZero() || now.After(lease.TakeoverUntil) {
+		return false
+	}
+	limit := lease.InflightLimit
+	if limit <= 0 {
+		limit = 2
+	}
+	return lease.InflightCount < limit
+}
+
+func beginUDPContentRouteInflight(contentID string, peerID string, now time.Time) bool {
+	contentID = strings.TrimSpace(contentID)
+	peerID = strings.TrimSpace(peerID)
+	if contentID == "" || peerID == "" {
+		return false
+	}
+	udpContentRouteState.mu.Lock()
+	defer udpContentRouteState.mu.Unlock()
+	lease, ok := udpContentRouteState.leases[contentID]
+	if !ok || strings.TrimSpace(lease.OwnerPeerID) != peerID || lease.TakeoverUntil.IsZero() || now.After(lease.TakeoverUntil) {
+		return false
+	}
+	if lease.InflightLimit <= 0 {
+		lease.InflightLimit = 2
+	}
+	if lease.InflightCount >= lease.InflightLimit {
+		udpContentRouteState.leases[contentID] = lease
+		return false
+	}
+	lease.InflightCount++
+	lease.LastUpdatedAt = now
+	udpContentRouteState.leases[contentID] = lease
+	return true
+}
+
+func finishUDPContentRouteInflight(contentID string, peerID string, now time.Time) {
+	contentID = strings.TrimSpace(contentID)
+	peerID = strings.TrimSpace(peerID)
+	if contentID == "" || peerID == "" {
+		return
+	}
+	udpContentRouteState.mu.Lock()
+	defer udpContentRouteState.mu.Unlock()
+	lease, ok := udpContentRouteState.leases[contentID]
+	if !ok || strings.TrimSpace(lease.OwnerPeerID) != peerID {
+		return
+	}
+	if lease.InflightCount > 0 {
+		lease.InflightCount--
+	}
 	lease.LastUpdatedAt = now
 	udpContentRouteState.leases[contentID] = lease
 }
@@ -1056,6 +1122,13 @@ func maxSessionTime(left time.Time, right time.Time) time.Time {
 
 func minInt(left int, right int) int {
 	if left < right {
+		return left
+	}
+	return right
+}
+
+func maxInt(left int, right int) int {
+	if left > right {
 		return left
 	}
 	return right

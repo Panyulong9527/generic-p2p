@@ -721,6 +721,100 @@ func TestReserveNextPieceFallsBackWhenTakeoverOwnerLacksPiece(t *testing.T) {
 	}
 }
 
+func TestReserveNextPieceSkipsTakeoverContinuityWhenQuotaFull(t *testing.T) {
+	now := time.Now()
+	contentID := "sha256-reserve-takeover-quota"
+	ownerPeerID := "udp://takeover-owner"
+	setUDPContentRouteTakeoverOwner(contentID, ownerPeerID, now)
+	if !beginUDPContentRouteInflight(contentID, ownerPeerID, now) || !beginUDPContentRouteInflight(contentID, ownerPeerID, now) {
+		t.Fatal("expected to fill takeover inflight quota")
+	}
+
+	manifest := &core.ContentManifest{
+		Version:   1,
+		ContentID: contentID,
+		TotalSize: 8,
+		PieceSize: 4,
+		Pieces: []core.PieceInfo{
+			{Index: 0, Length: 4, Hash: core.HashBytes([]byte("p000"))},
+			{Index: 1, Length: 4, Hash: core.HashBytes([]byte("p111"))},
+		},
+	}
+	store, err := core.OpenPieceStore(filepath.Join(t.TempDir(), "store"), manifest)
+	if err != nil {
+		t.Fatalf("open piece store: %v", err)
+	}
+	state := &downloadPieceState{inProgress: map[int]bool{}}
+	peers := []scheduler.PeerCandidate{
+		{PeerID: ownerPeerID, Transport: "udp", HaveRanges: []core.HaveRange{{Start: 1, End: 1}}},
+		{PeerID: "udp://other", Transport: "udp", HaveRanges: []core.HaveRange{{Start: 0, End: 0}}},
+	}
+
+	pieceIndex, ok := reserveNextPiece(manifest, store, state, peers)
+	if !ok {
+		t.Fatal("expected reservation")
+	}
+	if pieceIndex != 0 {
+		t.Fatalf("expected quota-full takeover to fall back to non-owner piece 0, got %d", pieceIndex)
+	}
+}
+
+func TestPreferUDPContentTakeoverSelectionSkipsOwnerWhenQuotaFull(t *testing.T) {
+	now := time.Now()
+	contentID := "sha256-download-takeover-quota"
+	handoffPeer := "udp://handoff-source"
+	takeoverPeer := "udp://takeover-owner"
+
+	noteUDPSessionPieceOwnership(handoffPeer, "198.51.100.131:9003", contentID, 1, true, now.Add(-6*time.Second))
+	noteUDPSessionPieceOwnership(handoffPeer, "198.51.100.131:9003", contentID, 1, true, now.Add(-3*time.Second))
+	noteUDPSessionPieceOwnership(handoffPeer, "198.51.100.131:9003", contentID, 1, false, now)
+	setUDPContentRouteTakeoverOwner(contentID, takeoverPeer, now)
+	if !beginUDPContentRouteInflight(contentID, takeoverPeer, now) || !beginUDPContentRouteInflight(contentID, takeoverPeer, now) {
+		t.Fatal("expected to fill takeover inflight quota")
+	}
+
+	selected := scheduler.PeerCandidate{
+		PeerID:     "tcp://steady",
+		Transport:  "tcp",
+		Score:      1.00,
+		HaveRanges: []core.HaveRange{{Start: 0, End: 5}},
+	}
+	peers := []scheduler.PeerCandidate{
+		selected,
+		{
+			PeerID:           takeoverPeer,
+			Transport:        "udp",
+			Score:            0.92,
+			PeerTopologyRole: peerTopologyRoleBulk,
+			PathAssistScore:  1.45,
+			HaveRanges:       []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	got := preferUDPContentTakeoverSelection(contentID, 2, selected, peers, now)
+	if got.PeerID != selected.PeerID {
+		t.Fatalf("expected quota-full takeover owner to stop overriding selection, got %+v", got)
+	}
+}
+
+func TestUDPContentRouteInflightQuotaReleases(t *testing.T) {
+	now := time.Now()
+	contentID := "sha256-takeover-inflight-release"
+	peerID := "udp://takeover-owner"
+	setUDPContentRouteTakeoverOwner(contentID, peerID, now)
+
+	if !beginUDPContentRouteInflight(contentID, peerID, now) || !beginUDPContentRouteInflight(contentID, peerID, now) {
+		t.Fatal("expected inflight acquisitions up to quota")
+	}
+	if beginUDPContentRouteInflight(contentID, peerID, now) {
+		t.Fatal("expected third inflight acquisition to fail at quota")
+	}
+	finishUDPContentRouteInflight(contentID, peerID, now.Add(time.Second))
+	if !beginUDPContentRouteInflight(contentID, peerID, now.Add(2*time.Second)) {
+		t.Fatal("expected inflight quota to reopen after release")
+	}
+}
+
 func TestUDPPieceChunkWindowAdjustsByStageRiskAndPublicMapping(t *testing.T) {
 	now := time.Now()
 	const contentID = "sha256-download-window-stage"

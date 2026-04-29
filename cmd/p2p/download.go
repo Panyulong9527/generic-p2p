@@ -168,6 +168,14 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 		var usedCandidate scheduler.PeerCandidate
 		var lastErr error
 		for burstIndex, candidate := range attemptCandidates {
+			acquiredTakeoverInflight := false
+			if candidate.Transport == "udp" && candidate.PeerID == udpContentRouteTakeoverOwner(manifest.ContentID, time.Now()) {
+				if !beginUDPContentRouteInflight(manifest.ContentID, candidate.PeerID, time.Now()) {
+					excluded[candidate.PeerID] = true
+					continue
+				}
+				acquiredTakeoverInflight = true
+			}
 			peerLoad.Acquire(candidate.PeerID)
 			if runtime := store.RuntimeStats(); runtime != nil {
 				_ = runtime.StartDownload(pieceIndex, candidate.PeerID, workerID, time.Now())
@@ -175,6 +183,9 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 			peerUsage.RecordAssignment(candidate.PeerID)
 			data, lastErr = fetchPieceFromCandidate(candidate, manifest.ContentID, pieceIndex, discovery.selfUDPListenAddr)
 			peerLoad.Release(candidate.PeerID)
+			if acquiredTakeoverInflight {
+				finishUDPContentRouteInflight(manifest.ContentID, candidate.PeerID, time.Now())
+			}
 			if runtime := store.RuntimeStats(); runtime != nil {
 				_ = runtime.FinishDownload(pieceIndex)
 			}
@@ -987,6 +998,9 @@ func preferUDPContentTakeoverSelection(contentID string, pieceIndex int, selecte
 	if strings.TrimSpace(ownerPeerID) == "" || ownerPeerID == selected.PeerID {
 		return selected
 	}
+	if !udpContentRouteTakeoverAvailable(contentID, ownerPeerID, now) {
+		return selected
+	}
 	var owner scheduler.PeerCandidate
 	found := false
 	for _, candidate := range peerCandidates {
@@ -1367,6 +1381,9 @@ func reserveTakeoverOwnerPiece(manifest *core.ContentManifest, store *core.Piece
 	}
 	ownerPeerID := udpContentRouteTakeoverOwner(manifest.ContentID, now)
 	if strings.TrimSpace(ownerPeerID) == "" {
+		return 0, false
+	}
+	if !udpContentRouteTakeoverAvailable(manifest.ContentID, ownerPeerID, now) {
 		return 0, false
 	}
 
