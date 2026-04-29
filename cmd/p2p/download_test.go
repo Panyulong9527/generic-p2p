@@ -492,6 +492,76 @@ func TestSelectionReasonMarksBulkTopologyPreference(t *testing.T) {
 	}
 }
 
+func TestPreferUDPContentTakeoverSelectionPrefersOwnerOverCloseTCP(t *testing.T) {
+	now := time.Now()
+	contentID := "sha256-download-takeover-owner"
+	handoffPeer := "udp://handoff-source"
+	takeoverPeer := "udp://takeover-owner"
+
+	noteUDPSessionPieceOwnership(handoffPeer, "198.51.100.111:9003", contentID, 1, true, now.Add(-6*time.Second))
+	noteUDPSessionPieceOwnership(handoffPeer, "198.51.100.111:9003", contentID, 1, true, now.Add(-3*time.Second))
+	noteUDPSessionPieceOwnership(handoffPeer, "198.51.100.111:9003", contentID, 1, false, now)
+	setUDPContentRouteTakeoverOwner(contentID, takeoverPeer, now)
+
+	selected := scheduler.PeerCandidate{
+		PeerID:     "tcp://steady",
+		Transport:  "tcp",
+		Score:      1.00,
+		HaveRanges: []core.HaveRange{{Start: 0, End: 5}},
+	}
+	peers := []scheduler.PeerCandidate{
+		selected,
+		{
+			PeerID:           takeoverPeer,
+			Transport:        "udp",
+			Score:            0.92,
+			PeerTopologyRole: peerTopologyRoleBulk,
+			PathAssistScore:  1.45,
+			HaveRanges:       []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	got := preferUDPContentTakeoverSelection(contentID, 2, selected, peers, now)
+	if got.PeerID != takeoverPeer {
+		t.Fatalf("expected takeover owner to override close tcp selection, got %+v", got)
+	}
+}
+
+func TestSelectionReasonMarksTakeoverOwnerPreference(t *testing.T) {
+	now := time.Now()
+	contentID := "sha256-download-takeover-reason"
+	handoffPeer := "udp://handoff-reason"
+	takeoverPeer := "udp://takeover-reason"
+
+	noteUDPSessionPieceOwnership(handoffPeer, "198.51.100.121:9003", contentID, 1, true, now.Add(-6*time.Second))
+	noteUDPSessionPieceOwnership(handoffPeer, "198.51.100.121:9003", contentID, 1, true, now.Add(-3*time.Second))
+	noteUDPSessionPieceOwnership(handoffPeer, "198.51.100.121:9003", contentID, 1, false, now)
+	noteUDPSessionStageSuccess(takeoverPeer, "198.51.100.122:9003", "piece", contentID, now.Add(-2*time.Second))
+	setUDPContentRouteTakeoverOwner(contentID, takeoverPeer, now)
+
+	selected := scheduler.PeerCandidate{
+		PeerID:           takeoverPeer,
+		Transport:        "udp",
+		Score:            0.96,
+		PeerTopologyRole: peerTopologyRoleBulk,
+		PathAssistScore:  1.42,
+		HaveRanges:       []core.HaveRange{{Start: 0, End: 5}},
+	}
+	peers := []scheduler.PeerCandidate{
+		selected,
+		{
+			PeerID:     "tcp://steady",
+			Transport:  "tcp",
+			Score:      1.02,
+			HaveRanges: []core.HaveRange{{Start: 0, End: 5}},
+		},
+	}
+
+	if got := selectionReason(2, selected, peers); got != "selected_udp_takeover_owner" {
+		t.Fatalf("expected takeover owner reason, got %s", got)
+	}
+}
+
 func TestSelectionReasonMarksTCPOverFallbackUDP(t *testing.T) {
 	selected := scheduler.PeerCandidate{
 		PeerID:           "tcp://backup",

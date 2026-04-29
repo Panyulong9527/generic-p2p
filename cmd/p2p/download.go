@@ -160,6 +160,7 @@ func downloadSinglePiece(logger *logging.Logger, manifest *core.ContentManifest,
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
+		selected = preferUDPContentTakeoverSelection(manifest.ContentID, pieceIndex, selected, peerCandidates, time.Now())
 		decision := recordSelectionDecision(store, pieceIndex, selected, peerCandidates)
 		reportTrackerUDPDecision(logger, discovery, manifest.ContentID, decision, udpDecisionReports)
 		attemptCandidates := pieceAttemptCandidates(manifest.ContentID, pieceIndex, selected, peerCandidates)
@@ -927,6 +928,9 @@ func reportTrackerUDPDecision(logger *logging.Logger, discovery peerDiscoveryOpt
 }
 
 func selectionReason(pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) string {
+	if selectedByContentTakeoverPreference(pieceIndex, selected, peerCandidates, time.Now()) {
+		return "selected_udp_takeover_owner"
+	}
 	if selected.Transport == "udp" {
 		if strings.TrimSpace(selected.PeerTopologyRole) == peerTopologyRoleBulk && selectedByTopologyRolePreference(pieceIndex, selected, peerCandidates) {
 			return "selected_udp_bulk_path"
@@ -976,6 +980,96 @@ func selectionReason(pieceIndex int, selected scheduler.PeerCandidate, peerCandi
 		return "selected_tcp_over_udp_candidate"
 	}
 	return "selected_tcp_no_udp_candidate"
+}
+
+func preferUDPContentTakeoverSelection(contentID string, pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate, now time.Time) scheduler.PeerCandidate {
+	ownerPeerID := udpContentRouteTakeoverOwner(contentID, now)
+	if strings.TrimSpace(ownerPeerID) == "" || ownerPeerID == selected.PeerID {
+		return selected
+	}
+	var owner scheduler.PeerCandidate
+	found := false
+	for _, candidate := range peerCandidates {
+		if candidate.PeerID != ownerPeerID {
+			continue
+		}
+		if pieceIndex >= 0 && !core.ContainsPiece(candidate.HaveRanges, pieceIndex) {
+			continue
+		}
+		owner = candidate
+		found = true
+		break
+	}
+	if !found || owner.Transport != "udp" {
+		return selected
+	}
+	if strings.TrimSpace(owner.PeerTopologyRole) == peerTopologyRoleFallback || strings.TrimSpace(owner.UDPDecisionRisk) == "low" {
+		return selected
+	}
+	if selected.Transport == "tcp" {
+		if owner.Score >= selected.Score-0.22 || owner.PathAssistScore >= selected.PathAssistScore-0.18 {
+			return owner
+		}
+		return selected
+	}
+	if owner.PathAssistScore > selected.PathAssistScore && owner.Score >= selected.Score-0.18 {
+		return owner
+	}
+	if strings.TrimSpace(selected.PeerTopologyRole) != peerTopologyRoleBulk && strings.TrimSpace(owner.PeerTopologyRole) == peerTopologyRoleBulk && owner.Score >= selected.Score-0.12 {
+		return owner
+	}
+	return selected
+}
+
+func selectedByContentTakeoverPreference(pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate, now time.Time) bool {
+	if selected.Transport != "udp" {
+		return false
+	}
+	contentID := inferContentIDForCandidates(selected, peerCandidates, now)
+	if strings.TrimSpace(contentID) == "" {
+		return false
+	}
+	ownerPeerID := udpContentRouteTakeoverOwner(contentID, now)
+	if ownerPeerID == "" || ownerPeerID != selected.PeerID {
+		return false
+	}
+	for _, candidate := range peerCandidates {
+		if candidate.PeerID == selected.PeerID {
+			continue
+		}
+		if pieceIndex >= 0 && !core.ContainsPiece(candidate.HaveRanges, pieceIndex) {
+			continue
+		}
+		if candidate.Transport == "tcp" && candidate.Score >= selected.Score-0.22 {
+			return true
+		}
+		if candidate.Transport == "udp" && candidate.PathAssistScore >= selected.PathAssistScore {
+			return true
+		}
+	}
+	return false
+}
+
+func inferContentIDForCandidates(selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate, now time.Time) string {
+	snapshots := currentUDPSessionSnapshots("", now)
+	for _, session := range snapshots {
+		if session.PeerID != selected.PeerID {
+			continue
+		}
+		if strings.TrimSpace(session.LeaseContentID) != "" {
+			return strings.TrimSpace(session.LeaseContentID)
+		}
+		for contentID := range session.RecentContentIDs {
+			return strings.TrimSpace(contentID)
+		}
+	}
+	for _, candidate := range peerCandidates {
+		if candidate.PeerID != selected.PeerID {
+			continue
+		}
+		break
+	}
+	return ""
 }
 
 func selectedByTopologyRolePreference(pieceIndex int, selected scheduler.PeerCandidate, peerCandidates []scheduler.PeerCandidate) bool {
